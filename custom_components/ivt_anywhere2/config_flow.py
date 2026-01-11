@@ -3,7 +3,6 @@ from __future__ import annotations
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import PointtApi
@@ -15,6 +14,7 @@ STEP_USER_SCHEMA = vol.Schema(
     }
 )
 
+
 class IVTAnywhereIIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
@@ -22,24 +22,43 @@ class IVTAnywhereIIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         if user_input is None:
-            return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors=errors)
+            return self.async_show_form(
+                step_id="user",
+                data_schema=STEP_USER_SCHEMA,
+                errors=errors,
+            )
 
-        refresh_token = user_input[CONF_REFRESH_TOKEN].strip()
+        refresh_token_in = user_input[CONF_REFRESH_TOKEN].strip()
 
         try:
             session = async_get_clientsession(self.hass)
-            api = PointtApi(session, refresh_token)
+            api = PointtApi(session, refresh_token_in)
+
+            # This call may trigger token refresh + rotation
             gateways = await api.get_gateways()
+
+            # IMPORTANT: store the (possibly rotated) token, not the input token
+            refresh_token_out = api.current_refresh_token().strip()
+            self._refresh_token = refresh_token_out
+
         except Exception:
             errors["base"] = "auth_failed"
-            return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors=errors)
+            return self.async_show_form(
+                step_id="user",
+                data_schema=STEP_USER_SCHEMA,
+                errors=errors,
+            )
 
         if not gateways:
             errors["base"] = "no_gateways"
-            return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA, errors=errors)
+            return self.async_show_form(
+                step_id="user",
+                data_schema=STEP_USER_SCHEMA,
+                errors=errors,
+            )
 
         # Store for next step
-        self._refresh_token = refresh_token
+        self._refresh_token = refresh_token_out
         self._gateways = gateways
 
         return await self.async_step_gateway()
@@ -51,7 +70,11 @@ class IVTAnywhereIIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema = vol.Schema({vol.Required(CONF_GATEWAY_ID): vol.In(gw_map)})
 
         if user_input is None:
-            return self.async_show_form(step_id="gateway", data_schema=schema, errors=errors)
+            return self.async_show_form(
+                step_id="gateway",
+                data_schema=schema,
+                errors=errors,
+            )
 
         gateway_id = user_input[CONF_GATEWAY_ID]
         title = f"IVT Anywhere II {gateway_id}"
