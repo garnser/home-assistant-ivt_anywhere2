@@ -1,7 +1,7 @@
 {
   "domain": "ivt_anywhere2",
   "name": "IVT Anywhere II (Bosch Pointt)",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "documentation": "https://github.com/garnser/home-assistant-ivt_anywhere2",
   "requirements": [],
   "dependencies": [],
