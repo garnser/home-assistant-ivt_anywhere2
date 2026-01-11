@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -13,11 +13,10 @@ from .const import DEFAULT_SCAN_INTERVAL_SECONDS
 from .util import (
     _extract_payload_from_bulk,
     compute_cop,
-    last_complete_hour_kwh,
+    kwh_at_index,
+    last_complete_hour_target,
     month_str,
     month_total_kwh,
-    today_str,
-    sum_kwh,
 )
 
 @dataclass
@@ -51,8 +50,11 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
 
     async def _async_update_data(self) -> EnergyData:
         try:
-            day = today_str()
+            # Determine the last *completed* hour deterministically (Stockholm TZ)
+            day, hour_idx, label = last_complete_hour_target()
             month = month_str()
+
+            self.logger.debug("Energy target bucket: %s (idx=%s)", label, hour_idx)
 
             # Fetch day (hourly) + month (daily) in two bulk calls.
             day_paths = [
@@ -93,9 +95,10 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
             p_m_eh = _extract_payload_from_bulk(month_resp, "/energyMonitoring/eheater?interval=")
             p_m_out = _extract_payload_from_bulk(month_resp, "/energyMonitoring/outputProduced?interval=")
 
-            comp_last, label = last_complete_hour_kwh(p_day_comp, day)
-            eh_last, _ = last_complete_hour_kwh(p_day_eh, day)
-            out_last, _ = last_complete_hour_kwh(p_day_out, day)
+            # Pick the exact bucket for the last completed hour
+            comp_last = kwh_at_index(p_day_comp, hour_idx)
+            eh_last = kwh_at_index(p_day_eh, hour_idx)
+            out_last = kwh_at_index(p_day_out, hour_idx)
 
             elec_last = None
             if comp_last is not None or eh_last is not None:
@@ -103,6 +106,7 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
 
             cop_last = compute_cop(out_last, elec_last)
 
+            # Month-to-date totals (sum daily buckets)
             comp_m = month_total_kwh(p_m_comp)
             eh_m = month_total_kwh(p_m_eh)
             out_m = month_total_kwh(p_m_out)
