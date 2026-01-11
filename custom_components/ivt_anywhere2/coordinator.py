@@ -7,6 +7,7 @@ from typing import Optional
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import PointtApi
 from .const import DEFAULT_SCAN_INTERVAL_SECONDS
@@ -18,6 +19,7 @@ from .util import (
     month_str,
     month_total_kwh,
 )
+
 
 @dataclass
 class EnergyData:
@@ -50,9 +52,12 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
 
     async def _async_update_data(self) -> EnergyData:
         try:
-            # Determine the last *completed* hour deterministically (Stockholm TZ)
-            day, hour_idx, label = last_complete_hour_target()
-            month = month_str()
+            # Timezone-aware "now" in the Home Assistant configured timezone
+            now = dt_util.now()
+
+            # Determine the last *completed* hour in HA's timezone
+            day, hour_idx, label = last_complete_hour_target(now)
+            month = month_str(now)
 
             self.logger.debug("Energy target bucket: %s (idx=%s)", label, hour_idx)
 

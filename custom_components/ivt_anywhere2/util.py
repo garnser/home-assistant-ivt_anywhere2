@@ -2,10 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Any, Optional, Tuple
-from zoneinfo import ZoneInfo
-
-# Home Assistant instance is in Europe/Stockholm for you
-DEFAULT_TZ = ZoneInfo("Europe/Stockholm")
 
 
 def wh_to_kwh(wh: float) -> float:
@@ -39,12 +35,20 @@ def _extract_payload_from_bulk(bulk_resp: Any, needle: str) -> Optional[dict]:
     return None
 
 
-def last_complete_hour_target(
-    now: Optional[datetime] = None,
-    tz: ZoneInfo = DEFAULT_TZ,
-) -> Tuple[str, int, str]:
+def _ensure_aware(now: Optional[datetime] = None) -> datetime:
+    """Ensure we always operate on a timezone-aware datetime."""
+    if now is None:
+        # Local timezone (system) with tzinfo attached
+        return datetime.now().astimezone()
+    if now.tzinfo is None:
+        # Treat as local time if someone accidentally passes naive
+        return now.astimezone()
+    return now
+
+
+def last_complete_hour_target(now: Optional[datetime] = None) -> Tuple[str, int, str]:
     """
-    Determine the most recently completed hour in the given timezone.
+    Determine the most recently completed hour using a timezone-aware 'now'.
 
     Returns:
       day_str:  'YYYY-MM-DD' (day interval to request)
@@ -52,12 +56,10 @@ def last_complete_hour_target(
       label:    'YYYY-MM-DD HH:00'
 
     Example:
-      If local time is 19:34, target is 18:00 hour -> day=today, idx=18, label='... 18:00'
-      If local time is 00:15, target is 23:00 hour of previous day -> day=yesterday, idx=23
+      If local time is 19:34, target is 18:00 -> day=today, idx=18
+      If local time is 00:15, target is 23:00 of previous day -> day=yesterday, idx=23
     """
-    now = now or datetime.now(tz)
-    now = now.astimezone(tz)
-
+    now = _ensure_aware(now)
     target = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
     day_str = target.strftime("%Y-%m-%d")
     idx = target.hour
@@ -97,9 +99,6 @@ def compute_cop(heat_kwh: Optional[float], elec_kwh: Optional[float]) -> Optiona
     return heat_kwh / elec_kwh
 
 
-def today_str(tz: ZoneInfo = DEFAULT_TZ) -> str:
-    return datetime.now(tz).strftime("%Y-%m-%d")
-
-
-def month_str(tz: ZoneInfo = DEFAULT_TZ) -> str:
-    return datetime.now(tz).strftime("%Y-%m")
+def month_str(now: Optional[datetime] = None) -> str:
+    now = _ensure_aware(now)
+    return now.strftime("%Y-%m")
