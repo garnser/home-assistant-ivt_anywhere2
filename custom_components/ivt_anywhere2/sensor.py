@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, Any
 
-from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
+from homeassistant.components.sensor import (
+    SensorEntity,
+    SensorEntityDescription,
+    SensorDeviceClass,
+    SensorStateClass,
+)
 from homeassistant.const import UnitOfEnergy
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -17,36 +23,39 @@ class IVTSensorDescription(SensorEntityDescription):
 
 
 SENSORS: tuple[IVTSensorDescription, ...] = (
+    # ----------------------------
+    # Last complete hour (per-hour energy) -> measurement
+    # ----------------------------
     IVTSensorDescription(
         key="electricity_last_hour",
         name="Electricity last complete hour",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class="energy",
-        state_class="measurement",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda d: d.electricity_kwh_last_hour,
     ),
     IVTSensorDescription(
         key="compressor_last_hour",
         name="Compressor electricity last complete hour",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class="energy",
-        state_class="measurement",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda d: d.compressor_kwh_last_hour,
     ),
     IVTSensorDescription(
         key="eheater_last_hour",
         name="E-heater electricity last complete hour",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class="energy",
-        state_class="measurement",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda d: d.eheater_kwh_last_hour,
     ),
     IVTSensorDescription(
         key="heat_output_last_hour",
         name="Heat output last complete hour",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class="energy",
-        state_class="measurement",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda d: d.heat_output_kwh_last_hour,
     ),
     IVTSensorDescription(
@@ -54,23 +63,26 @@ SENSORS: tuple[IVTSensorDescription, ...] = (
         name="COP last complete hour",
         native_unit_of_measurement=None,
         device_class=None,
-        state_class="measurement",
+        state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda d: d.cop_last_hour,
     ),
+    # ----------------------------
+    # Month-to-date cumulative energy -> total_increasing (Energy Dashboard compatible)
+    # ----------------------------
     IVTSensorDescription(
         key="electricity_month",
         name="Electricity month-to-date",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class="energy",
-        state_class="measurement",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda d: d.electricity_kwh_month,
     ),
     IVTSensorDescription(
         key="heat_output_month",
         name="Heat output month-to-date",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class="energy",
-        state_class="measurement",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda d: d.heat_output_kwh_month,
     ),
     IVTSensorDescription(
@@ -78,7 +90,7 @@ SENSORS: tuple[IVTSensorDescription, ...] = (
         name="COP month-to-date",
         native_unit_of_measurement=None,
         device_class=None,
-        state_class="measurement",
+        state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda d: d.cop_month,
     ),
 )
@@ -93,17 +105,26 @@ class IVTEnergySensor(CoordinatorEntity[IVTAnywhereIICoordinator], SensorEntity)
         self._attr_unique_id = f"{coordinator.gateway_id}_{description.key}"
 
     @property
-    def native_value(self):
+    def native_value(self) -> Optional[float]:
         data: EnergyData = self.coordinator.data
         return self.entity_description.value_fn(data)
 
     @property
-    def extra_state_attributes(self):
-        # handy label for the “last complete hour”
+    def extra_state_attributes(self) -> Optional[dict[str, Any]]:
         d = self.coordinator.data
         if "last_hour" in self.entity_description.key:
             return {"bucket": d.last_hour_label}
         return None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        gw_id = str(self.coordinator.gateway_id)
+        return DeviceInfo(
+            identifiers={(DOMAIN, gw_id)},
+            name=f"IVT Anywhere II {gw_id}",
+            manufacturer="Bosch / IVT",
+            model="IVT Anywhere II (iCom)",
+        )
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
