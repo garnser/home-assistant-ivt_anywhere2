@@ -1,5 +1,7 @@
 {
   "name": "IVT Anywhere II",
   "content_in_root": false,
-  "render_readme": true
+  "domains": ["ivt_anywhere2"],
+  "render_readme": true,
+  "zip_release": true
 }
