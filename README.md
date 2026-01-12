@@ -1,233 +1,189 @@
 # IVT Anywhere II – Home Assistant Integration
 
-This is a **custom Home Assistant integration** for **IVT / Bosch heat pumps using IVT Anywhere II** (Bosch Pointt cloud API).
+A custom Home Assistant integration for **IVT / Bosch heat pumps** that use the **IVT Anywhere II** mobile app (Bosch **Pointt** cloud API).
 
-It focuses on **energy and utilization data** that is available *after the fact* via Bosch’s cloud recordings API.
-
----
-
-## ✨ What this integration does
-
-* Connects to the **Bosch Pointt cloud API** used by the IVT Anywhere II mobile app
-* Collects **energy usage and heat output data** from your heat pump
-* Exposes the data as **Home Assistant sensors**
-* Handles **OAuth token refresh automatically**
-* Works reliably with **hourly and daily recorded data** (no live scraping)
+This integration focuses on **recorded energy & utilization data** (hourly/daily/monthly totals) that Bosch exposes via the cloud recordings endpoints. It is **not** a “live telemetry” integration.
 
 ---
 
-## 📊 Available sensors
+## Features
 
-### Last complete hour (hourly resolution)
-
-These sensors represent the **last fully completed hour** (not the current ongoing hour):
-
-* Electricity – last complete hour (kWh)
-* Compressor electricity – last complete hour (kWh)
-* Electric heater electricity – last complete hour (kWh)
-* Heat output – last complete hour (kWh)
-* COP – last complete hour
-
-Each “last hour” sensor includes an attribute:
-
-```
-bucket: "YYYY-MM-DD HH:00"
-```
-
-which indicates which hour the value represents.
+* Connects to the **Bosch Pointt cloud API** used by the IVT Anywhere II app
+* Exposes recorded energy data as **Home Assistant sensors**
+* Uses **Config Flow** (UI setup)
+* Handles **OAuth token refresh** during runtime
+* Polls at a sensible interval (data resolution is typically **hourly**)
 
 ---
 
-### Month-to-date totals (daily aggregation)
+## What you’ll get in Home Assistant
 
-* Electricity – month to date (kWh)
-* Heat output – month to date (kWh)
-* COP – month to date
+Sensors are built from the data Bosch records and publishes afterwards. Typical sensors include:
 
-These values are calculated by summing **daily buckets** returned by the Bosch API.
+* Electricity (last complete hour)
+* Heat output (last complete hour)
+* Compressor energy (last complete hour)
+* Electric heater energy (last complete hour)
+* COP (last complete hour)
 
----
+…and monthly totals equivalents where available.
 
-## ⚠️ Important limitations (by design)
-
-This integration is limited by what Bosch exposes in the Anywhere II cloud:
-
-* ❌ No real-time power (W)
-* ❌ No per-minute resolution
-* ❌ No guaranteed lifetime (monotonic) counters
-
-### Resolution
-
-* **Hourly** is the finest supported resolution
-* Data may be delayed (hourly buckets often appear after the hour is finished)
-
-This is normal and matches the behavior of the official IVT Anywhere II app.
+> Exact availability depends on your heat pump model and what Bosch records for your gateway.
 
 ---
 
-## 🔌 Home Assistant Energy Dashboard
+## Installation
 
-The sensors provided are **period-based kWh values**, not lifetime counters.
+### Option A — HACS (recommended)
 
-To use them in the Energy dashboard, you should create `utility_meter` sensors on top of them, for example:
+1. Open **HACS** in Home Assistant.
+2. Go to **Integrations**.
+3. Open the **⋮ menu** (top right) → **Custom repositories**.
+4. Add this repository URL and select category **Integration**.
+5. Find **IVT Anywhere II** in HACS and click **Download**.
+6. **Restart Home Assistant**.
+7. Go to **Settings → Devices & services → Add integration** and search for **IVT Anywhere II**.
 
-```yaml
-utility_meter:
-  ivt_electricity_daily:
-    source: sensor.ivt_anywhere2_electricity_last_complete_hour
-    cycle: daily
+### Option B — Manual install
 
-  ivt_electricity_monthly:
-    source: sensor.ivt_anywhere2_electricity_last_complete_hour
-    cycle: monthly
-```
-
----
-
-## 🔐 Authentication model
-
-### Why authentication is manual
-
-IVT Anywhere II uses:
-
-* Bosch SingleKey ID
-* OAuth2 Authorization Code flow
-* PKCE
-* A **mobile-app-only redirect URI**
-
-Because of this, Home Assistant **cannot perform the initial login flow directly**.
+1. Copy `custom_components/ivt_anywhere2/` into your Home Assistant `config/custom_components/` directory.
+2. Restart Home Assistant.
+3. Add the integration via **Settings → Devices & services → Add integration**.
 
 ---
 
-## ✅ How authentication works
+## Configuration (UI)
 
-### Step 1: Generate tokens (one-time)
+The integration is configured through the Home Assistant UI.
 
-Use the provided helper script (or your existing working script) to authenticate once:
+During setup you will be asked for:
+
+* **Refresh token** (from the IVT Anywhere II / Bosch Pointt OAuth flow)
+* Then you’ll select a **Gateway ID** detected for your account
+
+After you complete the flow, sensors will be added under a device named like:
+
+* `IVT Anywhere II <gateway_id>`
+
+---
+
+## Getting a refresh token
+
+This integration requires a **Bosch / IVT Anywhere II OAuth refresh token**.
+
+A helper script is included in the repository: **`ivt_anywhere2_auth.py`**.
+
+### Prerequisites
+
+* **Python 3.9+**
+* Python dependency: **httpx**
+
+Install httpx:
 
 ```bash
-python scripts/ivt_anywhere2_auth.py --out tokens.json --verify
+python -m pip install httpx
 ```
 
-* Open a browser
-* Let you log in with your Bosch / IVT account
-* Create a `tokens.json` file
+### Step-by-step
 
-Example:
+1. Run the helper script:
 
-```json
-{
-  "access_token": "...",
-  "refresh_token": "...",
-  "expires_at": 1768093925
-}
+```bash
+python ivt_anywhere2_auth.py
 ```
 
-You only need the **refresh_token**.
+2. The script will print an **authorization URL**. Open it in your browser and log in with the same account you use in the IVT Anywhere II app.
 
----
+3. After login, Bosch SingleKey redirects to an **app redirect URI** (it looks like `com.bosch.tt.dashtt.pointt://app/login?...`). Many desktop browsers won’t “open” that redirect.
 
-### Step 2: Set up the integration in Home Assistant
+   You still need to capture the OAuth **`code`** from the final redirect. You can do this in one of these ways:
 
-1. Copy the integration folder to:
+   * Copy the final redirect URL that contains `?code=...` (some browsers will show it briefly), **or**
+   * In browser devtools → Network, inspect the final request and copy the **`Location`** header from the 302 redirect (it contains `code=`), **or**
+   * Perform the login on a phone where the app is installed and copy/paste the `code` from the redirect URL.
 
-   ```
-   custom_components/ivt_anywhere2/
-   ```
+4. Paste either:
 
-2. Restart Home Assistant
+   * the **full redirect URL** containing `?code=...`, or
+   * **just the code value**
 
-3. Go to:
-   **Settings → Devices & Services → Add integration**
+   …when the script prompts you.
 
-4. Select **IVT Anywhere II**
+5. On success, the script will:
 
-5. Paste the **refresh token** when prompted
+   * print your **refresh token** (this is what you paste into the Home Assistant config flow)
+   * write a `tokens.json` file (default) containing `access_token`, `refresh_token`, and `expires_at`
 
-6. Select your gateway (usually only one)
+### Optional flags
 
-That’s it 🎉
+* Verify the tokens by calling `/gateways/` after auth:
 
-The integration will:
-
-* Refresh access tokens automatically
-* Retry when Bosch’s API is flaky
-* Keep working until Bosch revokes the refresh token
-
----
-
-## 🔄 Update interval
-
-The integration polls the cloud every **30 minutes** by default.
-
-This is intentional:
-
-* Hourly data does not change more frequently
-* Avoids unnecessary load and throttling
-
----
-
-## 🛠️ Reliability & retries
-
-Bosch’s `/bulk` endpoint is occasionally flaky and may return empty payloads.
-
-To handle this, the integration:
-
-* Retries bulk requests automatically
-* Re-requests data if all payloads come back empty
-* Fails gracefully without crashing Home Assistant
-
----
-
-## 🧠 Data interpretation
-
-### Electricity usage
-
-```
-Total electricity = compressor + electric heater
+```bash
+python ivt_anywhere2_auth.py --verify
 ```
 
-### COP (Coefficient of Performance)
+* Write tokens to a specific file:
 
+```bash
+python ivt_anywhere2_auth.py --out /path/to/tokens.json
 ```
-COP = heat output / total electricity
+
+* Refresh access token later using an existing `tokens.json` (uses the stored refresh token and updates the file):
+
+```bash
+python ivt_anywhere2_auth.py --out tokens.json --refresh-only
 ```
 
-All values are calculated from **Wh recordings**, converted to **kWh**.
+### Notes & warnings
+
+* The refresh token is **sensitive**. Treat it like a password.
+* Do **not** commit `tokens.json` or your refresh token to GitHub.
+* Tokens can be revoked by Bosch at any time, requiring you to generate a new one.
+* The helper script relies on Bosch’s current OAuth implementation and may break if the API changes.
 
 ---
 
-## 🚧 Known gaps / future work
+## Troubleshooting
 
-Possible future improvements:
+### No gateway(s) found
 
-* Optional auth helper bundled with the integration
-* Lifetime monotonic energy counters (if Bosch exposes them)
-* Separate CH / DHW energy if Bosch enables it
-* Configurable polling interval
+* Verify the refresh token is correct and still valid.
+* Confirm you can log in to the IVT Anywhere II app and see your system.
 
----
+### Sensors show `unknown` / `unavailable`
 
-## ⚖️ Disclaimer
+* Recorded data can lag behind real time (especially for “last complete hour”).
+* Wait until at least one full hour has passed after the integration is added.
 
-This integration:
+### Rate limits / API errors
 
-* Is **not affiliated with Bosch or IVT**
-* Uses **undocumented APIs**
-* May break if Bosch changes their backend
-
-Use at your own risk.
+* This is a cloud API. If Bosch throttles requests, the integration may temporarily fail updates.
+* Keep the scan interval reasonable (the integration defaults to polling in line with the data resolution).
 
 ---
 
-## ❤️ Credits
+## Data & privacy
+
+This integration talks to Bosch’s cloud endpoints over HTTPS. Your Home Assistant instance will send requests that include OAuth tokens. No data is intentionally sent anywhere else.
+
+---
+
+## Support / Issues
+
+* Bugs and feature requests: use the repository issue tracker.
+* Please include:
+
+  * Home Assistant version
+  * Integration version
+  * Logs (with tokens redacted)
+  * Your gateway model (if known)
+
+---
+
+## Credits
 
 Reverse engineering and testing made possible by:
 
 * Community Home Assistant efforts
-* Bosch thermostat reverse-engineering projects
+* Bosch thermostat/heat pump reverse-engineering projects
 * Real-world testing against IVT Anywhere II
-
----
-
-If you want help polishing this into a public HACS-ready integration (naming, icons, translations, options flow), just say the
