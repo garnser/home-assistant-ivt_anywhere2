@@ -5,13 +5,17 @@ from typing import Any, Optional, Tuple
 
 
 def wh_to_kwh(wh: float) -> float:
-    return float(wh) / 1000.0
-
+    return float(wh * 10) / 1000.0
 
 def recording_points(payload: dict) -> list[float]:
     rec = payload.get("recording") or []
-    return [float((p.get("y") or 0.0)) for p in rec]
-
+    pts = []
+    for p in rec:
+        # Drop padding / incomplete buckets (often y=1, c=0)
+        if (p.get("c") or 0) <= 0:
+            continue
+        pts.append(float(p.get("y") or 0.0))
+    return pts
 
 def sum_kwh(payload: Optional[dict]) -> Optional[float]:
     if not payload:
