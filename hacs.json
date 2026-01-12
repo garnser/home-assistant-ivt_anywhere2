@@ -1,7 +1,13 @@
 {
   "name": "IVT Anywhere II",
   "content_in_root": false,
-  "domains": ["ivt_anywhere2"],
+  "domain": "ivt_anywhere2",
   "render_readme": true,
-  "zip_release": true
+  "zip_release": true,
+  "issue_tracker": "https://github.com/garnser/home-assistant-ivt_anywhere2/issues",
+  "documentation": "https://github.com/garnser/home-assistant-ivt_anywhere2/",
+  "requirements": [],
+  "integration_type": "device",
+  "codeowners": ["@garnser"],
+  "dependencies": []
 }
