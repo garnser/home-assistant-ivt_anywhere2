@@ -1,6 +1,7 @@
 """Regression tests using synthetic PointT data, without credentials or network."""
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import math
 import unittest
 
@@ -67,6 +68,21 @@ class RecordingTests(unittest.TestCase):
         self.assertIsNone(util.kwh_at_index(payload(), 1))
         self.assertIsNone(util.kwh_at_index(None, 0))
 
+    def test_hour_reset_is_stable_within_a_period(self):
+        first = util.last_complete_hour_start(datetime.fromisoformat("2026-02-01T12:01:00+01:00"))
+        later = util.last_complete_hour_start(datetime.fromisoformat("2026-02-01T12:59:00+01:00"))
+        next_hour = util.last_complete_hour_start(datetime.fromisoformat("2026-02-01T13:01:00+01:00"))
+        self.assertEqual(first, later)
+        self.assertNotEqual(first, next_hour)
+        self.assertEqual(first.isoformat(), "2026-02-01T10:00:00+00:00")
+
+    def test_repeated_dst_hours_have_distinct_reset_markers(self):
+        zone = ZoneInfo("Europe/Stockholm")
+        first = datetime(2026, 10, 25, 2, 30, tzinfo=zone, fold=0)
+        second = datetime(2026, 10, 25, 2, 30, tzinfo=zone, fold=1)
+        self.assertNotEqual(util.last_complete_hour_start(first), util.last_complete_hour_start(second))
+        self.assertEqual(util.last_complete_hour_target(second)[1], 2)
+
     def test_recording_rate_must_match_the_requested_period(self):
         self.assertIsNone(util.kwh_at_index(payload(rate="P1D"), 0))
         self.assertIsNone(util.month_total_kwh(payload(rate="P1H")))
@@ -111,6 +127,15 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data.electricity_kwh_last_hour, 2)
         self.assertEqual(data.electricity_kwh_month, 20)
         self.assertEqual(data.cop_month, 0.5)
+
+    async def test_equal_hourly_values_still_have_distinct_periods(self):
+        first = await self.update()
+        repeated = await self.update()
+        self.assertEqual(first.last_hour_reset, repeated.last_hour_reset)
+        clock.now = lambda: datetime(2026, 2, 1, 13, tzinfo=timezone.utc)
+        next_hour = await self.update()
+        self.assertEqual(first.electricity_kwh_last_hour, next_hour.electricity_kwh_last_hour)
+        self.assertNotEqual(first.last_hour_reset, next_hour.last_hour_reset)
 
     async def test_missing_compressor_never_becomes_heater_only_total(self):
         self.api.missing = "compressor"
@@ -177,10 +202,10 @@ class SensorTests(unittest.TestCase):
     def entity(self, key):
         return sensor.IVTEnergySensor(self.ctx, next(d for d in sensor.SENSORS if d.key == key))
 
-    def test_hourly_energy_has_no_incompatible_measurement_state_class(self):
+    def test_hourly_energy_uses_supported_periodic_total_state_class(self):
         for description in sensor.SENSORS:
             if description.key.endswith("last_hour") and description.device_class == "energy":
-                self.assertIsNone(description.state_class)
+                self.assertEqual(description.state_class, "total")
 
     def test_monthly_energy_still_supports_energy_dashboard(self):
         for description in sensor.SENSORS:
@@ -191,6 +216,15 @@ class SensorTests(unittest.TestCase):
         for key in ["electricity_month", "heat_output_month"]:
             self.assertEqual(self.entity(key)._attr_unique_id, f"test-gateway_{key}")
         self.assertEqual(self.entity("electricity_last_hour")._attr_unique_id, "test-gateway_electricity_last_hour")
+
+    def test_reset_marker_applies_only_to_hourly_energy(self):
+        from types import SimpleNamespace
+        marker = datetime(2026, 2, 1, 11, tzinfo=timezone.utc)
+        self.ctx.data = SimpleNamespace(last_hour_reset=marker)
+        for key in ["electricity_last_hour", "compressor_last_hour", "eheater_last_hour", "heat_output_last_hour"]:
+            self.assertEqual(self.entity(key).last_reset, marker)
+        for key in ["electricity_month", "heat_output_month", "cop_last_hour", "cop_month"]:
+            self.assertIsNone(self.entity(key).last_reset)
 
     def test_missing_value_is_unavailable_but_measured_zero_is_available(self):
         from types import SimpleNamespace

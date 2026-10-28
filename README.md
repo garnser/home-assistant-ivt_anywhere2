@@ -50,9 +50,12 @@ The last accepted values are retained across restarts and reset at the next
 calendar month. Separate compressor and auxiliary-heater monthly sensors make
 the electricity total easier to compare with the corresponding app views.
 
-The per-hour energy sensors have no state class: each is one interval's kWh,
-not a cumulative meter or an instantaneous power measurement. Monthly energy
-sensors use `total_increasing`. COP uses `measurement`.
+The per-hour energy sensors use `total` with an explicit `last_reset` for the
+recorded hour. This retains long-term statistics while treating each hour as a
+new energy cycle. Repeated polls and restarts within the same recorded hour
+keep the same reset marker. Monthly energy sensors use `total_increasing`.
+COP uses `measurement`. See Home Assistant's
+[periodic totals guidance](https://contributors.home-assistant.io/core/entities/sensor/#choosing-between-total-classes).
 
 ---
 

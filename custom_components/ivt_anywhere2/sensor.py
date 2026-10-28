@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable, Optional, Any
 
 from homeassistant.components.sensor import (
@@ -24,14 +25,14 @@ class IVTSensorDescription(SensorEntityDescription):
 
 SENSORS: tuple[IVTSensorDescription, ...] = (
     # ----------------------------
-    # Per-hour energy is not an instantaneous measurement or a cumulative meter.
+    # Each completed hour is a separate energy cycle with an explicit reset.
     # ----------------------------
     IVTSensorDescription(
         key="electricity_last_hour",
         name="Electricity last complete hour",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=None,
+        state_class=SensorStateClass.TOTAL,
         value_fn=lambda d: d.electricity_kwh_last_hour,
     ),
     IVTSensorDescription(
@@ -39,7 +40,7 @@ SENSORS: tuple[IVTSensorDescription, ...] = (
         name="Compressor electricity last complete hour",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=None,
+        state_class=SensorStateClass.TOTAL,
         value_fn=lambda d: d.compressor_kwh_last_hour,
     ),
     IVTSensorDescription(
@@ -47,7 +48,7 @@ SENSORS: tuple[IVTSensorDescription, ...] = (
         name="E-heater electricity last complete hour",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=None,
+        state_class=SensorStateClass.TOTAL,
         value_fn=lambda d: d.eheater_kwh_last_hour,
     ),
     IVTSensorDescription(
@@ -55,7 +56,7 @@ SENSORS: tuple[IVTSensorDescription, ...] = (
         name="Heat output last complete hour",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=None,
+        state_class=SensorStateClass.TOTAL,
         value_fn=lambda d: d.heat_output_kwh_last_hour,
     ),
     IVTSensorDescription(
@@ -123,6 +124,14 @@ class IVTEnergySensor(CoordinatorEntity[IVTAnywhereIICoordinator], SensorEntity)
     @property
     def available(self) -> bool:
         return super().available and self.entity_description.value_fn(self.coordinator.data) is not None
+
+    @property
+    def last_reset(self) -> Optional[datetime]:
+        """Reset once per recorded hour, never once per poll or restart."""
+        if self.entity_description.state_class != SensorStateClass.TOTAL:
+            return None
+        data = self.coordinator.data
+        return data.last_hour_reset if data is not None else None
 
     @property
     def native_value(self) -> Optional[float]:

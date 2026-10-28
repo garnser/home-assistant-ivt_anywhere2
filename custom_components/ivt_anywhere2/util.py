@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Tuple
 
 
@@ -87,6 +87,16 @@ def _ensure_aware(now: Optional[datetime] = None) -> datetime:
     return now
 
 
+def last_complete_hour_start(now: Optional[datetime] = None) -> datetime:
+    """Return a stable UTC cycle marker for the last completed hour.
+
+    Calculate in UTC so the two hours with the same local label during the
+    autumn DST transition still have distinct reset markers.
+    """
+    current = _ensure_aware(now).astimezone(timezone.utc)
+    return current.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+
+
 def last_complete_hour_target(now: Optional[datetime] = None) -> Tuple[str, int, str]:
     """
     Determine the most recently completed hour using a timezone-aware 'now'.
@@ -101,7 +111,7 @@ def last_complete_hour_target(now: Optional[datetime] = None) -> Tuple[str, int,
       If local time is 00:15, target is 23:00 of previous day -> day=yesterday, idx=23
     """
     now = _ensure_aware(now)
-    target = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    target = last_complete_hour_start(now).astimezone(now.tzinfo)
     day_str = target.strftime("%Y-%m-%d")
     idx = target.hour
     label = f"{day_str} {idx:02d}:00"
