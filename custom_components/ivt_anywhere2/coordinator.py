@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Optional
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -49,6 +51,12 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
         )
         self.api = api
         self.gateway_id = gateway_id
+        self._month_store = Store(
+            hass, 1, f"ivt_anywhere2.{gateway_id}.monthly_samples_v1"
+        )
+        self._month_guard_loaded = False
+        self._counter_month: Optional[str] = None
+        self._month_high_water: dict[str, float] = {}
 
     async def _async_update_data(self) -> EnergyData:
         try:
@@ -106,19 +114,24 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
             out_last = kwh_at_index(p_day_out, hour_idx)
 
             elec_last = None
-            if comp_last is not None or eh_last is not None:
-                elec_last = (comp_last or 0.0) + (eh_last or 0.0)
+            if comp_last is not None and eh_last is not None:
+                elec_last = comp_last + eh_last
 
             cop_last = compute_cop(out_last, elec_last)
 
             # Month-to-date totals (sum daily buckets)
-            comp_m = month_total_kwh(p_m_comp)
-            eh_m = month_total_kwh(p_m_eh)
-            out_m = month_total_kwh(p_m_out)
+            comp_m = month_total_kwh(p_m_comp, required_days=now.day - 1)
+            eh_m = month_total_kwh(p_m_eh, required_days=now.day - 1)
+            out_m = month_total_kwh(p_m_out, required_days=now.day - 1)
 
-            elec_m = None
-            if comp_m is not None or eh_m is not None:
-                elec_m = (comp_m or 0.0) + (eh_m or 0.0)
+            comp_m, eh_m, out_m = await self._async_accept_monthly_totals(
+                month, comp_m, eh_m, out_m
+            )
+            elec_m = (
+                comp_m + eh_m
+                if comp_m is not None and eh_m is not None
+                else None
+            )
 
             cop_m = compute_cop(out_m, elec_m)
 
@@ -139,3 +152,68 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
 
         except Exception as e:
             raise UpdateFailed(str(e)) from e
+
+    async def _async_accept_monthly_totals(
+        self,
+        month: str,
+        compressor: Optional[float],
+        eheater: Optional[float],
+        output: Optional[float],
+    ) -> tuple[Optional[float], Optional[float], Optional[float]]:
+        """Keep cloud revisions from looking like a cumulative meter reset.
+
+        A lower reading is unavailable until it catches up. The accepted values
+        survive restarts and are reset only at a real month boundary.
+        """
+        if not self._month_guard_loaded:
+            saved = await self._month_store.async_load()
+            if isinstance(saved, dict):
+                self._counter_month = saved.get("month")
+                values = saved.get("values", {})
+                if isinstance(values, dict):
+                    self._month_high_water = {
+                        key: float(value)
+                        for key, value in values.items()
+                        if key in {"compressor", "eheater", "output"}
+                        and not isinstance(value, bool)
+                        and isinstance(value, (int, float))
+                        and math.isfinite(value)
+                        and value >= 0
+                    }
+            self._month_guard_loaded = True
+
+        changed = self._counter_month != month
+        if changed:
+            self._counter_month = month
+            self._month_high_water = {}
+
+        accepted: list[Optional[float]] = []
+        for key, value in zip(
+            ("compressor", "eheater", "output"),
+            (compressor, eheater, output),
+        ):
+            previous = self._month_high_water.get(key)
+            if value is None:
+                accepted.append(None)
+                continue
+            if previous is not None and value < previous - 1e-6:
+                self.logger.debug(
+                    "Ignoring downward monthly recording revision for %s", key
+                )
+                accepted.append(None)
+                continue
+            # Ignore insignificant floating-point decreases as well.
+            value = max(value, previous) if previous is not None else value
+            changed |= value != previous
+            self._month_high_water[key] = value
+            accepted.append(value)
+
+        if changed:
+            self._month_store.async_delay_save(
+                lambda: {
+                    "month": self._counter_month,
+                    "values": dict(self._month_high_water),
+                },
+                5,
+            )
+        return accepted[0], accepted[1], accepted[2]

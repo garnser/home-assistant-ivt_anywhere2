@@ -30,6 +30,30 @@ Sensors are built from the data Bosch records and publishes afterwards. Typical 
 
 > Exact availability depends on your heat pump model and what Bosch records for your gateway.
 
+### How recorded energy is calculated
+
+For the supported `energyMonitoring` recordings, `y` is a sampled sum and `c`
+is the sample count. They are not raw Wh values. The integration calculates
+each hourly (`P1H`) bucket as `y / c` kWh and each daily (`P1D`) bucket as
+`24 * y / c` kWh. For example, `y=60, c=60` represents 1 kWh for an hourly
+bucket; `y=600, c=1440` represents 10 kWh for a daily bucket. This matches the
+[FHEM KM200 recording implementation](https://github.com/fhem/fhem-mirror/blob/master/fhem/FHEM/73_km200.pm).
+
+Zero-count buckets are padding or missing data. They are not measured zero
+consumption. Missing or invalid readings are unavailable, and electricity/COP
+require both compressor and auxiliary-heater data. Month-to-date totals also
+require data for every completed day. A genuine measured zero remains valid.
+
+Temporary downward revisions of a monthly total are unavailable until the
+reading catches up, so Home Assistant does not treat them as a meter reset.
+The last accepted values are retained across restarts and reset at the next
+calendar month. Separate compressor and auxiliary-heater monthly sensors make
+the electricity total easier to compare with the corresponding app views.
+
+The per-hour energy sensors have no state class: each is one interval's kWh,
+not a cumulative meter or an instantaneous power measurement. Monthly energy
+sensors use `total_increasing`. COP uses `measurement`.
+
 ---
 
 ## Installation
@@ -169,6 +193,16 @@ This integration talks to Bosch’s cloud endpoints over HTTPS. Your Home Assist
 ---
 
 ## Support / Issues
+
+### Running the regression tests
+
+```sh
+python -m unittest discover -s tests -v
+```
+
+The tests use synthetic recordings and minimal Home Assistant interface stubs
+to exercise the actual utility, coordinator, and sensor modules offline. They
+do not require credentials, network access, or a running Home Assistant server.
 
 * Bugs and feature requests: use the repository issue tracker.
 * Please include:
