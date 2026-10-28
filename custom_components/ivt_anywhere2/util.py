@@ -1,26 +1,63 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta
 from typing import Any, Optional, Tuple
 
 
 def wh_to_kwh(wh: float) -> float:
-    return float(wh * 10) / 1000.0
+    """Convert actual Wh. PointT yRecording values use sample normalization instead."""
+    return float(wh) / 1000.0
 
-def recording_points(payload: dict) -> list[float]:
-    rec = payload.get("recording") or []
-    pts = []
-    for p in rec:
-        # Drop padding / incomplete buckets (often y=1, c=0)
-        if (p.get("c") or 0) <= 0:
+
+def recording_points(payload: dict) -> Optional[list[float]]:
+    """Normalize PointT yRecording sums by sample count and interval hours.
+
+    These energy paths are not Wh values: y/c is the sampled hourly value.
+    P1H buckets cover one hour; P1D buckets cover 24 hours. A zero count is
+    padding or missing data, not measured zero consumption.
+    """
+    hours = {"P1H": 1.0, "P1D": 24.0}.get(payload.get("sampleRate"))
+    rec = payload.get("recording")
+    if hours is None or not isinstance(rec, list):
+        return None
+    points = []
+    for point in rec:
+        if not isinstance(point, dict):
+            return None
+        count = point.get("c")
+        if (
+            isinstance(count, bool)
+            or not isinstance(count, (int, float))
+            or not math.isfinite(count)
+            or count < 0
+        ):
+            return None
+        if count == 0:
             continue
-        pts.append(float(p.get("y") or 0.0))
-    return pts
+        value = point.get("y")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            return None
+        normalized = float(value) / float(count) * hours
+        if not math.isfinite(normalized):
+            return None
+        points.append(normalized)
+    return points or None
+
 
 def sum_kwh(payload: Optional[dict]) -> Optional[float]:
-    if not payload:
+    if not isinstance(payload, dict):
         return None
-    return sum(wh_to_kwh(v) for v in recording_points(payload))
+    points = recording_points(payload)
+    if points is None:
+        return None
+    total = sum(points)
+    return total if math.isfinite(total) else None
 
 
 def _extract_payload_from_bulk(bulk_resp: Any, needle: str) -> Optional[dict]:
@@ -72,28 +109,29 @@ def last_complete_hour_target(now: Optional[datetime] = None) -> Tuple[str, int,
 
 
 def kwh_at_index(payload: Optional[dict], idx: int) -> Optional[float]:
-    """
-    Return kWh for recording[idx] where 'y' is Wh.
-    For missing payload / out of range / missing y -> None.
-    """
-    if not payload:
+    if not isinstance(payload, dict) or payload.get("sampleRate") != "P1H":
         return None
-
-    rec = payload.get("recording") or []
-    if idx < 0 or idx >= len(rec):
+    rec = payload.get("recording")
+    if not isinstance(rec, list) or idx < 0 or idx >= len(rec):
         return None
+    points = recording_points(
+        {"sampleRate": payload.get("sampleRate"), "recording": [rec[idx]]}
+    )
+    return None if points is None else points[0]
 
-    y = rec[idx].get("y")
-    if y is None:
+
+def month_total_kwh(payload: Optional[dict], required_days: int = 0) -> Optional[float]:
+    if not isinstance(payload, dict) or payload.get("sampleRate") != "P1D":
         return None
-
-    try:
-        return wh_to_kwh(float(y))
-    except Exception:
+    rec = payload.get("recording")
+    if not isinstance(rec, list) or len(rec) < required_days:
         return None
-
-
-def month_total_kwh(payload: Optional[dict]) -> Optional[float]:
+    for point in rec[:required_days]:
+        values = recording_points(
+            {"sampleRate": payload.get("sampleRate"), "recording": [point]}
+        )
+        if values is None:
+            return None
     return sum_kwh(payload)
 
 

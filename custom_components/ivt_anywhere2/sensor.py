@@ -24,14 +24,14 @@ class IVTSensorDescription(SensorEntityDescription):
 
 SENSORS: tuple[IVTSensorDescription, ...] = (
     # ----------------------------
-    # Last complete hour (per-hour energy) -> measurement
+    # Per-hour energy is not an instantaneous measurement or a cumulative meter.
     # ----------------------------
     IVTSensorDescription(
         key="electricity_last_hour",
         name="Electricity last complete hour",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=None,
         value_fn=lambda d: d.electricity_kwh_last_hour,
     ),
     IVTSensorDescription(
@@ -39,7 +39,7 @@ SENSORS: tuple[IVTSensorDescription, ...] = (
         name="Compressor electricity last complete hour",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=None,
         value_fn=lambda d: d.compressor_kwh_last_hour,
     ),
     IVTSensorDescription(
@@ -47,7 +47,7 @@ SENSORS: tuple[IVTSensorDescription, ...] = (
         name="E-heater electricity last complete hour",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=None,
         value_fn=lambda d: d.eheater_kwh_last_hour,
     ),
     IVTSensorDescription(
@@ -55,7 +55,7 @@ SENSORS: tuple[IVTSensorDescription, ...] = (
         name="Heat output last complete hour",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=None,
         value_fn=lambda d: d.heat_output_kwh_last_hour,
     ),
     IVTSensorDescription(
@@ -69,6 +69,22 @@ SENSORS: tuple[IVTSensorDescription, ...] = (
     # ----------------------------
     # Month-to-date cumulative energy -> total_increasing (Energy Dashboard compatible)
     # ----------------------------
+    IVTSensorDescription(
+        key="compressor_month",
+        name="Compressor electricity month-to-date",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda d: d.compressor_kwh_month,
+    ),
+    IVTSensorDescription(
+        key="eheater_month",
+        name="E-heater electricity month-to-date",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda d: d.eheater_kwh_month,
+    ),
     IVTSensorDescription(
         key="electricity_month",
         name="Electricity month-to-date",
@@ -103,6 +119,10 @@ class IVTEnergySensor(CoordinatorEntity[IVTAnywhereIICoordinator], SensorEntity)
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{coordinator.gateway_id}_{description.key}"
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.entity_description.value_fn(self.coordinator.data) is not None
 
     @property
     def native_value(self) -> Optional[float]:
