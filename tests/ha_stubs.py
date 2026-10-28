@@ -89,7 +89,7 @@ modules = {
         SensorEntity=type("SensorEntity", (), {}),
         SensorEntityDescription=SensorEntityDescription,
         SensorDeviceClass=SimpleNamespace(ENERGY="energy"),
-        SensorStateClass=SimpleNamespace(MEASUREMENT="measurement", TOTAL_INCREASING="total_increasing"),
+        SensorStateClass=SimpleNamespace(MEASUREMENT="measurement", TOTAL="total", TOTAL_INCREASING="total_increasing"),
     ),
     "homeassistant.const": module(
         "homeassistant.const", UnitOfEnergy=SimpleNamespace(KILO_WATT_HOUR="kWh")

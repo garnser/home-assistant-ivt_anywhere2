@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Optional
 
 from homeassistant.core import HomeAssistant
@@ -17,6 +17,7 @@ from .util import (
     _extract_payload_from_bulk,
     compute_cop,
     kwh_at_index,
+    last_complete_hour_start,
     last_complete_hour_target,
     month_str,
     month_total_kwh,
@@ -39,6 +40,7 @@ class EnergyData:
     electricity_kwh_month: Optional[float]
     heat_output_kwh_month: Optional[float]
     cop_month: Optional[float]
+    last_hour_reset: Optional[datetime] = None
 
 
 class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
@@ -138,6 +140,7 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
             return EnergyData(
                 gateway_id=self.gateway_id,
                 last_hour_label=label,
+                last_hour_reset=last_complete_hour_start(now),
                 compressor_kwh_last_hour=comp_last,
                 eheater_kwh_last_hour=eh_last,
                 electricity_kwh_last_hour=elec_last,
