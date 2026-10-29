@@ -100,6 +100,12 @@ are supported; an ambiguous 24-slot response on such a day is skipped instead
 of assigning readings to guessed hours. Recorder import failures do not make
 the live sensor entities unavailable.
 
+Missing resources in a bulk response are retried once without replacing healthy
+responses. If a report is still incomplete, or the cloud request fails, the
+coordinator retries after one minute. Complete reports restore the normal
+30-minute polling interval. This prevents a transient empty response from
+leaving the cards unavailable for a full polling interval.
+
 Upgrading from a build that included today's daily projection discards the old
 cached peak. Corrected monthly readings may be lower. Historical Home Assistant
 statistics are not rewritten by the integration; review any previously inflated

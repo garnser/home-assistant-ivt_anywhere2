@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import math
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from ha_stubs import clock, coordinator, hass, sensor, util, UpdateFailed
 
@@ -118,6 +119,9 @@ class Api:
 
 class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        sleeper = patch.object(coordinator.asyncio, "sleep", new_callable=AsyncMock)
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
         clock.now = lambda: datetime(2026, 2, 2, 0, tzinfo=timezone.utc)
         self.hass = hass()
         self.api = Api()
@@ -231,6 +235,61 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.api.error = RuntimeError("offline")
         with self.assertRaises(UpdateFailed):
             await self.update()
+        self.assertEqual(self.ctx.update_interval.total_seconds(), 60)
+
+    async def test_incomplete_reports_retry_in_one_minute_then_restore_normal_poll(self):
+        self.api.empty = True
+        await self.update()
+        self.assertEqual(self.ctx.update_interval.total_seconds(), 60)
+        self.api.empty = False
+        await self.update()
+        self.assertEqual(self.ctx.update_interval.total_seconds(), 1800)
+
+    async def test_partial_bulk_retry_recovers_only_the_missing_resource(self):
+        original = self.api.bulk
+        requests = []
+        async def bulk(gateway, paths):
+            requests.append(list(paths))
+            response = await original(gateway, paths)
+            if len(requests) == 1:
+                response[0]["resourcePaths"][0]["gatewayResponse"]["payload"] = None
+            return response
+        self.api.bulk = bulk
+        data = await self.update()
+        self.assertEqual(len(requests[1]), 1)
+        self.assertIn("/compressor?", requests[1][0])
+        self.assertEqual(data.electricity_kwh_last_hour, 2)
+        self.assertEqual(self.ctx.update_interval.total_seconds(), 1800)
+
+    async def test_retry_failure_preserves_successful_resource_payloads(self):
+        original = self.api.bulk
+        requests = []
+        async def bulk(gateway, paths):
+            requests.append(list(paths))
+            if len(requests) == 2:
+                raise RuntimeError("retry failed")
+            response = await original(gateway, paths)
+            if len(requests) == 1:
+                response[0]["resourcePaths"][0]["gatewayResponse"]["payload"] = None
+            return response
+        self.api.bulk = bulk
+        data = await self.update()
+        self.assertIsNone(data.compressor_kwh_last_hour)
+        self.assertEqual(data.eheater_kwh_last_hour, 1)
+        self.assertEqual(data.heat_output_kwh_last_hour, 1)
+        self.assertEqual(self.ctx.update_interval.total_seconds(), 60)
+
+    async def test_zero_consumption_does_not_cause_fast_retry(self):
+        original = self.api.bulk
+        async def bulk(gateway, paths):
+            response = await original(gateway, paths)
+            for entry in response[0]["resourcePaths"]:
+                for row in entry["gatewayResponse"]["payload"]["recording"]:
+                    row["y"] = 0
+            return response
+        self.api.bulk = bulk
+        self.assertEqual((await self.update()).electricity_kwh_month, 0)
+        self.assertEqual(self.ctx.update_interval.total_seconds(), 1800)
 
     async def test_recorder_failure_does_not_take_energy_sensors_down(self):
         self.hass.fail_statistics = True
