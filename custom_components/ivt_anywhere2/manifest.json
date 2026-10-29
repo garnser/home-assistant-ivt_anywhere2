@@ -1,11 +1,10 @@
 {
   "domain": "ivt_anywhere2",
   "name": "IVT Anywhere II (Bosch Pointt)",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "documentation": "https://github.com/garnser/home-assistant-ivt_anywhere2",
   "requirements": [],
   "dependencies": ["recorder"],
-  "codeowners": [],
   "config_flow": true,
   "iot_class": "cloud_polling",
   "render_readme": true,
