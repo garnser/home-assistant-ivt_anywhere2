@@ -71,9 +71,34 @@ current month, so the transition does not count the entire month again.
 COP uses `measurement`. See Home Assistant's
 [periodic totals guidance](https://contributors.home-assistant.io/core/entities/sensor/#choosing-between-total-classes).
 
-For hourly electricity charts in the Energy dashboard, select **Electricity
-last complete hour**, rather than a delayed monthly counter. Recorded hours
-arrive after they finish and may appear in the reporting hour in Home Assistant.
+### Energy dashboard: use recorded-hour statistics
+
+For electricity charts, select **IVT <gateway> electricity (recorded hours)**
+as an individual device in the Energy dashboard. Its statistic ID is
+`ivt_anywhere2:<gateway>_electricity_recorded` (punctuation in gateway IDs is
+normalized to underscores). This is a statistics source, not another light,
+switch or sensor entity.
+
+Each reading is imported with the start of the hour it covers. A 09:00–10:00
+reading received at 10:03 is therefore placed in 09:00–10:00. The native
+**Electricity last complete hour** sensor remains useful for current values
+and automations, but its ordinary history is timestamped when HA receives it.
+Replace that source in Energy; do not add both sources for the same consumption.
+
+The new source initially imports the current and previous day. Subsequent
+polls refresh those days, replace corrected readings, and catch up days missed
+while HA was offline in batches of at most three days per poll. Missing hours
+stay absent until valid data arrives. Measured zeros remain valid. A persisted
+hour journal makes repeated polling and restarts idempotent and keeps cumulative
+totals continuous across midnight, month and year boundaries. The journal and
+outage catch-up are bounded to 62 days; older measured values become a persisted
+counter baseline, while their long-term statistics stay in Recorder. Existing native
+sensor statistics are not rewritten or deleted by this feature.
+
+Timestamps use UTC internally. Actual 23/25-slot daylight-saving day recordings
+are supported; an ambiguous 24-slot response on such a day is skipped instead
+of assigning readings to guessed hours. Recorder import failures do not make
+the live sensor entities unavailable.
 
 Upgrading from a build that included today's daily projection discards the old
 cached peak. Corrected monthly readings may be lower. Historical Home Assistant

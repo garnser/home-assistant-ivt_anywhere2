@@ -232,6 +232,13 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(UpdateFailed):
             await self.update()
 
+    async def test_recorder_failure_does_not_take_energy_sensors_down(self):
+        self.hass.fail_statistics = True
+        with self.assertLogs(self.ctx.logger, level="WARNING"):
+            data = await self.update()
+        self.assertEqual(data.electricity_kwh_month, 20)
+        self.assertEqual(data.electricity_kwh_last_hour, 2)
+
     async def test_tiny_floating_point_revision_never_decreases_counter(self):
         await self.update()
         self.api.month_value -= 1e-7

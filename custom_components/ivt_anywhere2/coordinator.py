@@ -13,6 +13,7 @@ from homeassistant.util import dt as dt_util
 
 from .api import PointtApi
 from .const import DEFAULT_SCAN_INTERVAL_SECONDS
+from .statistics import RecordedEnergyStatistics
 from .util import (
     _extract_payload_from_bulk,
     accept_monthly_total,
@@ -62,6 +63,7 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
         self._counter_month: Optional[str] = None
         self._month_high_water: dict[str, float] = {}
         self._month_reset: Optional[datetime] = None
+        self.recorded_energy = RecordedEnergyStatistics(hass, gateway_id, self.logger)
 
     async def _async_update_data(self) -> EnergyData:
         try:
@@ -140,6 +142,23 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
             )
 
             cop_m = compute_cop(out_m, elec_m)
+
+            async def fetch_recorded_day(recorded_day):
+                paths = [
+                    f"/recordings/heatSources/total/energyMonitoring/{kind}?interval={recorded_day}"
+                    for kind in ("compressor", "eheater")
+                ]
+                response = await _bulk_with_retry(paths)
+                return (
+                    _extract_payload_from_bulk(response, "/energyMonitoring/compressor?interval="),
+                    _extract_payload_from_bulk(response, "/energyMonitoring/eheater?interval="),
+                )
+
+            try:
+                await self.recorded_energy.async_update(day, p_day_comp, p_day_eh, now, fetch_recorded_day)
+            except Exception:
+                # A recorder failure must not take the live energy sensors down.
+                self.logger.warning("Unable to import recorded-hour electricity statistics", exc_info=True)
 
             return EnergyData(
                 gateway_id=self.gateway_id,
