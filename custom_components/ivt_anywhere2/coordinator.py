@@ -15,6 +15,7 @@ from .api import PointtApi
 from .const import DEFAULT_SCAN_INTERVAL_SECONDS
 from .util import (
     _extract_payload_from_bulk,
+    accept_monthly_total,
     compute_cop,
     kwh_at_index,
     last_complete_hour_start,
@@ -165,8 +166,9 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
     ) -> tuple[Optional[float], Optional[float], Optional[float]]:
         """Keep cloud revisions from looking like a cumulative meter reset.
 
-        A lower reading is unavailable until it catches up. The accepted values
-        survive restarts and are reset only at a real month boundary.
+        Small downward revisions retain the accepted total; larger drops and
+        missing reports remain unavailable. The accepted values survive restarts
+        and are reset only at a real month boundary.
         """
         if not self._month_guard_loaded:
             saved = await self._month_store.async_load()
@@ -196,20 +198,17 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
             (compressor, eheater, output),
         ):
             previous = self._month_high_water.get(key)
-            if value is None:
+            result = accept_monthly_total(value, previous)
+            if result is None:
+                if value is not None:
+                    self.logger.debug(
+                        "Ignoring invalid or large downward monthly recording revision for %s", key
+                    )
                 accepted.append(None)
                 continue
-            if previous is not None and value < previous - 1e-6:
-                self.logger.debug(
-                    "Ignoring downward monthly recording revision for %s", key
-                )
-                accepted.append(None)
-                continue
-            # Ignore insignificant floating-point decreases as well.
-            value = max(value, previous) if previous is not None else value
-            changed |= value != previous
-            self._month_high_water[key] = value
-            accepted.append(value)
+            changed |= result != previous
+            self._month_high_water[key] = result
+            accepted.append(result)
 
         if changed:
             self._month_store.async_delay_save(

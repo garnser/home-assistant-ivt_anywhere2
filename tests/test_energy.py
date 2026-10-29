@@ -93,6 +93,7 @@ class Api:
         self.missing = None
         self.empty = False
         self.month_value = 600
+        self.month_values = {}
         self.error = None
 
     async def bulk(self, gateway, paths):
@@ -102,7 +103,11 @@ class Api:
         for path in paths:
             kind = path.split("energyMonitoring/")[1].split("?")[0]
             monthly = len(path.split("interval=")[1]) == 7
-            p = payload(self.month_value, 1440, "P1D") if monthly else payload(length=24)
+            p = (
+                payload(self.month_values.get(kind, self.month_value), 1440, "P1D")
+                if monthly
+                else payload(length=24)
+            )
             if self.empty:
                 p["recording"] = []
             if kind == self.missing:
@@ -193,6 +198,77 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         await self.update()
         self.api.month_value -= 1e-7
         self.assertEqual((await self.update()).electricity_kwh_month, 20)
+    async def test_small_compressor_revision_keeps_total_and_cop_available(self):
+        await self.update()
+        # 597 / 1440 * 24 = 9.95 kWh, a 0.05 kWh revision of the accepted 10.
+        self.api.month_values["compressor"] = 597
+        data = await self.update()
+        self.assertEqual(data.compressor_kwh_month, 10)
+        self.assertEqual(data.electricity_kwh_month, 20)
+        self.assertEqual(data.cop_month, 0.5)
+
+    async def test_repeated_small_revisions_neither_decrease_nor_inflate(self):
+        await self.update()
+        for reading in [597, 598, 596, 599]:
+            self.api.month_value = reading
+            data = await self.update()
+            self.assertEqual(data.electricity_kwh_month, 20)
+            self.assertEqual(data.heat_output_kwh_month, 10)
+        self.assertEqual(self.ctx._month_high_water, {"compressor": 10, "eheater": 10, "output": 10})
+
+    async def test_restart_still_holds_small_cloud_revision(self):
+        await self.update()
+        self.api.month_values["compressor"] = 597
+        await self.update()
+        self.ctx = coordinator.IVTAnywhereIICoordinator(self.hass, self.api, "test-gateway")
+        data = await self.update()
+        self.assertEqual(data.compressor_kwh_month, 10)
+        self.assertEqual(data.electricity_kwh_month, 20)
+
+    async def test_growth_resumes_after_small_revision(self):
+        await self.update()
+        self.api.month_values["compressor"] = 597
+        await self.update()
+        self.api.month_values["compressor"] = 606
+        data = await self.update()
+        self.assertEqual(data.compressor_kwh_month, 10.1)
+        self.assertEqual(data.electricity_kwh_month, 20.1)
+
+    async def test_missing_report_after_small_revision_stays_unavailable(self):
+        await self.update()
+        self.api.month_values["compressor"] = 597
+        await self.update()
+        self.api.missing = "compressor"
+        data = await self.update()
+        self.assertIsNone(data.compressor_kwh_month)
+        self.assertIsNone(data.electricity_kwh_month)
+        self.assertIsNone(data.cop_month)
+
+
+class MonthlyTotalTests(unittest.TestCase):
+    def test_first_sample_and_growth(self):
+        self.assertEqual(util.accept_monthly_total(0, None), 0)
+        self.assertEqual(util.accept_monthly_total(12.5, None), 12.5)
+        self.assertEqual(util.accept_monthly_total(101, 100), 101)
+
+    def test_small_absolute_and_relative_revisions(self):
+        for value, previous in [(99.95, 100), (999.5, 1000), (10 - 1e-9, 10)]:
+            with self.subTest(value=value, previous=previous):
+                self.assertEqual(util.accept_monthly_total(value, previous), previous)
+
+    def test_threshold_boundaries(self):
+        self.assertEqual(util.accept_monthly_total(99.9, 100), 100)
+        self.assertIsNone(util.accept_monthly_total(99.899, 100))
+        self.assertEqual(util.accept_monthly_total(999, 1000), 1000)
+        self.assertIsNone(util.accept_monthly_total(998.99, 1000))
+
+    def test_missing_and_invalid_values(self):
+        for value in [None, -1, math.inf, -math.inf, math.nan]:
+            with self.subTest(value=value):
+                self.assertIsNone(util.accept_monthly_total(value, 100))
+
+    def test_large_same_month_reset_remains_unavailable(self):
+        self.assertIsNone(util.accept_monthly_total(1, 1000))
 
 
 class SensorTests(unittest.TestCase):

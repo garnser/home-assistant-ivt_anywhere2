@@ -151,6 +151,27 @@ def compute_cop(heat_kwh: Optional[float], elec_kwh: Optional[float]) -> Optiona
     return heat_kwh / elec_kwh
 
 
+def accept_monthly_total(
+    value: Optional[float], previous: Optional[float]
+) -> Optional[float]:
+    """Hold small cloud revisions without resetting cumulative energy statistics.
+
+    Reports can revise completed daily buckets slightly downwards. Retain the
+    accepted high-water value for corrections up to 0.1 kWh or 0.1%, whichever
+    is larger. Missing reports and larger drops remain unavailable; the existing
+    calendar-month reset clears the high-water values at the month boundary.
+    """
+    if value is None or not math.isfinite(value) or value < 0:
+        return None
+    if previous is None or not math.isfinite(previous) or previous < 0:
+        return value
+    if value >= previous:
+        return value
+    if previous - value <= max(0.1, previous * 0.001):
+        return previous
+    return None
+
+
 def month_str(now: Optional[datetime] = None) -> str:
     now = _ensure_aware(now)
     return now.strftime("%Y-%m")

@@ -44,11 +44,15 @@ consumption. Missing or invalid readings are unavailable, and electricity/COP
 require both compressor and auxiliary-heater data. Month-to-date totals also
 require data for every completed day. A genuine measured zero remains valid.
 
-Temporary downward revisions of a monthly total are unavailable until the
-reading catches up, so Home Assistant does not treat them as a meter reset.
-The last accepted values are retained across restarts and reset at the next
-calendar month. Separate compressor and auxiliary-heater monthly sensors make
-the electricity total easier to compare with the corresponding app views.
+Small downward revisions of a monthly total retain the last accepted value,
+so the monthly electricity total and COP stay available without making Home
+Assistant treat a tiny correction as a meter reset. The tolerance is 0.1 kWh
+or 0.1% of the accepted total, whichever is larger. Values can therefore lag a
+minor cloud correction until the reported total catches up. Larger drops and
+genuinely missing data remain unavailable. The last accepted values are retained
+across restarts and reset at the next calendar month. Separate compressor and
+auxiliary-heater monthly sensors make the electricity total easier to compare
+with the corresponding app views.
 
 The per-hour energy sensors use `total` with an explicit `last_reset` for the
 recorded hour. This retains long-term statistics while treating each hour as a
