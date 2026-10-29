@@ -10,3 +10,4 @@ CONF_REFRESH_TOKEN = "refresh_token"
 CONF_GATEWAY_ID = "gateway_id"
 
 DEFAULT_SCAN_INTERVAL_SECONDS = 1800  # poll every 30 min; data resolution is hourly anyway
+RETRY_INTERVAL_SECONDS = 60  # recover promptly from missing or failed cloud reports

@@ -12,7 +12,8 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import PointtApi
-from .const import DEFAULT_SCAN_INTERVAL_SECONDS
+from .const import DEFAULT_SCAN_INTERVAL_SECONDS, RETRY_INTERVAL_SECONDS
+from .statistics import RecordedEnergyStatistics
 from .util import (
     _extract_payload_from_bulk,
     accept_monthly_total,
@@ -62,6 +63,7 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
         self._counter_month: Optional[str] = None
         self._month_high_water: dict[str, float] = {}
         self._month_reset: Optional[datetime] = None
+        self.recorded_energy = RecordedEnergyStatistics(hass, gateway_id, self.logger)
 
     async def _async_update_data(self) -> EnergyData:
         try:
@@ -86,20 +88,26 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
                 f"/recordings/heatSources/total/energyMonitoring/outputProduced?interval={month}",
             ]
 
-            # Some flakiness is possible → retry quickly if everything comes back empty
+            # Retry missing resources without throwing away healthy responses.
             async def _bulk_with_retry(paths):
                 r = await self.api.bulk(self.gateway_id, paths)
-                # If all payloads are null, sleep and try once more
                 try:
-                    entries = r[0].get("resourcePaths", [])
-                    nullish = sum(
-                        1 for e in entries if (e.get("gatewayResponse") or {}).get("payload") is None
-                    )
-                    if entries and nullish == len(entries):
+                    root = r[0]
+                    entries = {e.get("resourcePath"): e for e in root.get("resourcePaths", [])}
+                    def valid(entry):
+                        response = (entry or {}).get("gatewayResponse") or {}
+                        return response.get("status") == 200 and response.get("payload") is not None
+                    missing = [path for path in paths if not valid(entries.get(path))]
+                    if missing:
                         await asyncio.sleep(0.8)
-                        r = await self.api.bulk(self.gateway_id, paths)
-                except Exception:
-                    pass
+                        retry = await self.api.bulk(self.gateway_id, missing)
+                        for entry in retry[0].get("resourcePaths", []):
+                            path = entry.get("resourcePath")
+                            if path in missing and valid(entry):
+                                entries[path] = entry
+                        r = [{**root, "resourcePaths": [entries[path] for path in paths if path in entries]}]
+                except Exception as err:
+                    self.logger.debug("Recording retry incomplete: %s", type(err).__name__)
                 return r
 
             day_resp = await _bulk_with_retry(day_paths)
@@ -141,6 +149,30 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
 
             cop_m = compute_cop(out_m, elec_m)
 
+            incomplete = any(value is None for value in (
+                comp_last, eh_last, out_last, comp_m, eh_m, out_m,
+            ))
+            self.update_interval = timedelta(seconds=(
+                RETRY_INTERVAL_SECONDS if incomplete else DEFAULT_SCAN_INTERVAL_SECONDS
+            ))
+
+            async def fetch_recorded_day(recorded_day):
+                paths = [
+                    f"/recordings/heatSources/total/energyMonitoring/{kind}?interval={recorded_day}"
+                    for kind in ("compressor", "eheater")
+                ]
+                response = await _bulk_with_retry(paths)
+                return (
+                    _extract_payload_from_bulk(response, "/energyMonitoring/compressor?interval="),
+                    _extract_payload_from_bulk(response, "/energyMonitoring/eheater?interval="),
+                )
+
+            try:
+                await self.recorded_energy.async_update(day, p_day_comp, p_day_eh, now, fetch_recorded_day)
+            except Exception:
+                # A recorder failure must not take the live energy sensors down.
+                self.logger.warning("Unable to import recorded-hour electricity statistics", exc_info=True)
+
             return EnergyData(
                 gateway_id=self.gateway_id,
                 last_hour_label=label,
@@ -159,6 +191,7 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
             )
 
         except Exception as e:
+            self.update_interval = timedelta(seconds=RETRY_INTERVAL_SECONDS)
             raise UpdateFailed(str(e)) from e
 
     async def _async_accept_monthly_totals(

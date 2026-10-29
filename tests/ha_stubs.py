@@ -55,6 +55,16 @@ class UpdateFailed(Exception):
     pass
 
 
+def add_external_statistics(hass, metadata, rows):
+    if hass.fail_statistics:
+        raise RuntimeError("recorder unavailable")
+    rows = copy.deepcopy(rows)
+    hass.imports.append((copy.deepcopy(metadata), rows))
+    series = hass.statistics.setdefault(metadata["statistic_id"], {})
+    for row in rows:
+        series[row["start"]] = row
+
+
 @dataclass
 class SensorEntityDescription:
     key: str
@@ -84,6 +94,13 @@ modules = {
     ),
     "homeassistant.util": module("homeassistant.util", dt=clock),
     "homeassistant.components": module("homeassistant.components"),
+    "homeassistant.components.recorder": module("homeassistant.components.recorder"),
+    "homeassistant.components.recorder.models": module(
+        "homeassistant.components.recorder.models", StatisticMeanType=SimpleNamespace(NONE=0)
+    ),
+    "homeassistant.components.recorder.statistics": module(
+        "homeassistant.components.recorder.statistics", async_add_external_statistics=add_external_statistics
+    ),
     "homeassistant.components.sensor": module(
         "homeassistant.components.sensor",
         SensorEntity=type("SensorEntity", (), {}),
@@ -100,7 +117,8 @@ with patch.dict(sys.modules, modules):
     util = importlib.import_module(f"{PACKAGE}.util")
     coordinator = importlib.import_module(f"{PACKAGE}.coordinator")
     sensor = importlib.import_module(f"{PACKAGE}.sensor")
+    recorded_statistics = importlib.import_module(f"{PACKAGE}.statistics")
 
 
 def hass(storage=None):
-    return SimpleNamespace(storage={} if storage is None else storage)
+    return SimpleNamespace(storage={} if storage is None else storage, statistics={}, imports=[], fail_statistics=False)
