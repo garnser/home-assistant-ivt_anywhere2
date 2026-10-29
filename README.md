@@ -10,9 +10,10 @@ This integration focuses on **recorded energy & utilization data** (hourly/daily
 
 * Connects to the **Bosch Pointt cloud API** used by the IVT Anywhere II app
 * Exposes recorded energy data as **Home Assistant sensors**
+* Imports **hourly electricity statistics at their measurement time** for the Energy dashboard
 * Uses **Config Flow** (UI setup)
 * Handles **OAuth token refresh** during runtime
-* Polls at a sensible interval (data resolution is typically **hourly**)
+* Polls every **30 minutes**, with **one-minute retries** for incomplete or failed reports
 
 ---
 
@@ -44,6 +45,11 @@ consumption. Missing or invalid readings are unavailable, and electricity/COP
 require both compressor and auxiliary-heater data. Month-to-date totals also
 require data for every completed day and every completed hour of today. A genuine measured zero remains valid.
 
+COP is reported heat output divided by compressor plus auxiliary-heater
+electricity. Zero electricity makes COP undefined, so it is unavailable; reported
+zero heat with positive electricity produces COP 0. These are Bosch-reported
+values: the integration does not independently validate physical heat production.
+
 Month-to-date is the sum of completed daily buckets before today plus today's
 completed hourly buckets. Today's daily bucket is never included: its average
 extrapolated to 24 hours is a projection, not consumption so far. For example,
@@ -73,23 +79,33 @@ COP uses `measurement`. See Home Assistant's
 
 ### Energy dashboard: use recorded-hour statistics
 
-For electricity charts, select **IVT <gateway> electricity (recorded hours)**
-as an individual device in the Energy dashboard. Its statistic ID is
-`ivt_anywhere2:<gateway>_electricity_recorded` (punctuation in gateway IDs is
-normalized to underscores). This is a statistics source, not another light,
-switch or sensor entity.
+In the Energy dashboard configuration, add an **individual device** with the
+source **IVT \<gateway\> electricity (recorded hours)**. If the heater is already
+listed using **Electricity last complete hour** or a monthly electricity sensor,
+edit that entry and replace its source instead of adding another heater entry.
+
+The statistic ID is `ivt_anywhere2:<gateway>_electricity_recorded`. Gateway IDs
+are lowercased and punctuation is normalized to underscores. This is a Recorder
+statistics source, so it will not appear as a new entity in Developer Tools.
+Recorder is a required dependency. The source appears after the first valid
+hourly recording is imported; restart HA after updating the integration.
 
 Each reading is imported with the start of the hour it covers. A 09:00–10:00
 reading received at 10:03 is therefore placed in 09:00–10:00. The native
 **Electricity last complete hour** sensor remains useful for current values
 and automations, but its ordinary history is timestamped when HA receives it.
-Replace that source in Energy; do not add both sources for the same consumption.
+Use only the recorded-hour source for that heater's consumption in Energy.
+Home Assistant's configured timezone must match the timezone used by the gateway's
+recordings so local hours are assigned correctly.
 
-The new source initially imports the current and previous day. Subsequent
-polls refresh those days, replace corrected readings, and catch up days missed
-while HA was offline in batches of at most three days per poll. Missing hours
-stay absent until valid data arrives. Measured zeros remain valid. A persisted
-hour journal makes repeated polling and restarts idempotent and keeps cumulative
+The new source initially imports the day containing the last completed hour
+and the preceding day, where data is available. During the first hour after
+midnight, the last completed hour belongs to yesterday. Subsequent polls refresh
+those days, replace corrected readings, and catch up missed days. At most three
+historical days are fetched per poll, in addition to the already-requested
+report day. Missing hours stay absent until valid data arrives. Measured zeros
+remain valid. A transient empty response does not erase previously imported
+readings. A persisted hour journal makes repeated polling and restarts idempotent and keeps cumulative
 totals continuous across midnight, month and year boundaries. The journal and
 outage catch-up are bounded to 62 days; older measured values become a persisted
 counter baseline, while their long-term statistics stay in Recorder. Existing native
@@ -103,8 +119,8 @@ the live sensor entities unavailable.
 Missing resources in a bulk response are retried once without replacing healthy
 responses. If a report is still incomplete, or the cloud request fails, the
 coordinator retries after one minute. Complete reports restore the normal
-30-minute polling interval. This prevents a transient empty response from
-leaving the cards unavailable for a full polling interval.
+30-minute polling interval. Readings remain unavailable while valid data is
+missing; the shorter interval reduces the delay before checking for recovery.
 
 Upgrading from a build that included today's daily projection discards the old
 cached peak. Corrected monthly readings may be lower. Historical Home Assistant
@@ -118,18 +134,35 @@ Energy readings separately before relying on them.
 ### Option A — HACS (recommended)
 
 1. Open **HACS** in Home Assistant.
-2. Go to **Integrations**.
-3. Open the **⋮ menu** (top right) → **Custom repositories**.
-4. Add this repository URL and select category **Integration**.
-5. Find **IVT Anywhere II** in HACS and click **Download**.
-6. **Restart Home Assistant**.
-7. Go to **Settings → Devices & services → Add integration** and search for **IVT Anywhere II**.
+2. Open the **⋮ menu** (top right) → **Custom repositories**.
+3. Add `https://github.com/garnser/home-assistant-ivt_anywhere2`, select type **Integration**, and add it.
+4. Find **IVT Anywhere II** in HACS and click **Download**.
+5. **Restart Home Assistant**.
+6. Go to **Settings → Devices & services → Add integration** and search for **IVT Anywhere II**.
+
+See the [HACS custom repository instructions](https://www.hacs.xyz/docs/faq/custom_repositories/).
 
 ### Option B — Manual install
 
 1. Copy `custom_components/ivt_anywhere2/` into your Home Assistant `config/custom_components/` directory.
 2. Restart Home Assistant.
 3. Add the integration via **Settings → Devices & services → Add integration**.
+
+### Updating an existing installation
+
+1. Back up your configuration and any locally modified integration files.
+2. Update through HACS, or replace the entire `custom_components/ivt_anywhere2/`
+   folder from the new release for a manual installation. New modules such as
+   `statistics.py` must be included.
+3. Restart Home Assistant. Keep your existing integration entry and configuration.
+4. In Energy, replace the heater's old hourly or monthly source with
+   **IVT \<gateway\> electricity (recorded hours)** as described above.
+
+Upgrading does not automatically change your Energy dashboard settings. The new
+source initially supplies the two report days described above; older statistics
+from the previous source remain stored separately and are not automatically
+copied or repaired. Upgrades from v0.2.3 or earlier can lower corrected monthly
+readings because unfinished-day projections are excluded.
 
 ---
 
@@ -152,25 +185,32 @@ After you complete the flow, sensors will be added under a device named like:
 
 This integration requires a **Bosch / IVT Anywhere II OAuth refresh token**.
 
-A helper script is included in the repository: **`ivt_anywhere2_auth.py`**.
+A helper script is included at **`scripts/ivt_anywhere2_auth.py`**.
+Run the commands below from the repository root.
 
 ### Prerequisites
 
-* **Python 3.9+**
+* **Python 3.10+** for the standalone helper and offline tests
 * Python dependency: **httpx**
 
-Install httpx:
+For example, create a virtual environment and install httpx on macOS/Linux:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install httpx
 ```
+
+On Windows, activate the environment with `.venv\Scripts\activate` instead.
+These prerequisites are for the helper on your computer; Home Assistant manages
+its own Python environment.
 
 ### Step-by-step
 
 1. Run the helper script:
 
 ```bash
-python ivt_anywhere2_auth.py
+python scripts/ivt_anywhere2_auth.py
 ```
 
 2. The script will print an **authorization URL**. Open it in your browser and log in with the same account you use in the IVT Anywhere II app.
@@ -200,20 +240,24 @@ python ivt_anywhere2_auth.py
 * Verify the tokens by calling `/gateways/` after auth:
 
 ```bash
-python ivt_anywhere2_auth.py --verify
+python scripts/ivt_anywhere2_auth.py --verify
 ```
 
 * Write tokens to a specific file:
 
 ```bash
-python ivt_anywhere2_auth.py --out /path/to/tokens.json
+python scripts/ivt_anywhere2_auth.py --out /path/to/tokens.json
 ```
 
 * Refresh access token later using an existing `tokens.json` (uses the stored refresh token and updates the file):
 
 ```bash
-python ivt_anywhere2_auth.py --out tokens.json --refresh-only
+python scripts/ivt_anywhere2_auth.py --out tokens.json --refresh-only
 ```
+
+Home Assistant refreshes and persists its own rotated token after setup. The
+helper's token file is not kept in sync with HA and can become stale. Do not use
+`--refresh-only` to manage a token already being used by a running HA entry.
 
 ### Notes & warnings
 
@@ -233,13 +277,29 @@ python ivt_anywhere2_auth.py --out tokens.json --refresh-only
 
 ### Sensors show `unknown` / `unavailable`
 
-* Recorded data can lag behind real time (especially for “last complete hour”).
-* Wait until at least one full hour has passed after the integration is added.
+* Recorded data can lag behind real time, especially just after an hour ends.
+* Historical recordings are fetched during setup; you do not need to wait a new
+  full hour if Bosch already has valid completed-hour data.
+* Incomplete reports are retried after one minute. Persistent missing data stays
+  unavailable and is not replaced with an estimated zero.
+* Check whether the IVT Anywhere II app shows energy history for the same gateway.
+  A successful update request does not guarantee that recording payloads or
+  completed buckets were returned.
+
+### Energy chart shows the wrong hour or the new source is absent
+
+* Use **IVT \<gateway\> electricity (recorded hours)**, not the native last-hour
+  sensor or a monthly total, and remove any duplicate source for the same heater.
+* Restart HA after installing the update. The source requires at least one valid
+  hourly recording; it is a statistic, not a sensor entity.
+* Confirm HA's timezone matches the gateway recordings. Missing hours and
+  ambiguous daylight-saving responses are left absent until supported data is available.
 
 ### Rate limits / API errors
 
 * This is a cloud API. If Bosch throttles requests, the integration may temporarily fail updates.
-* Keep the scan interval reasonable (the integration defaults to polling in line with the data resolution).
+* The integration polls every 30 minutes when reports are complete, and retries
+  incomplete or failed requests after one minute. There is no scan-interval UI option.
 
 ---
 
@@ -257,8 +317,9 @@ This integration talks to Bosch’s cloud endpoints over HTTPS. Your Home Assist
 python -m unittest discover -s tests -v
 ```
 
-The tests use synthetic recordings and minimal Home Assistant interface stubs
-to exercise the actual utility, coordinator, and sensor modules offline. They
+Use Python 3.10 or newer. The tests use synthetic recordings and minimal Home
+Assistant interface stubs to exercise the actual utility, coordinator, sensor,
+and recorded-statistics modules offline. They
 do not require credentials, network access, or a running Home Assistant server.
 
 * Bugs and feature requests: use the repository issue tracker.
@@ -268,6 +329,10 @@ do not require credentials, network access, or a running Home Assistant server.
   * Integration version
   * Logs (with tokens redacted)
   * Your gateway model (if known)
+  * Whether the IVT Anywhere II app shows energy history for that gateway
+  * Which source is selected for the heater in the Energy dashboard
+
+Do not attach `tokens.json`, refresh tokens, or unredacted authentication-helper output.
 
 ---
 
