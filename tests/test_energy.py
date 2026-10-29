@@ -118,7 +118,7 @@ class Api:
 
 class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        clock.now = lambda: datetime(2026, 2, 1, 12, tzinfo=timezone.utc)
+        clock.now = lambda: datetime(2026, 2, 2, 0, tzinfo=timezone.utc)
         self.hass = hass()
         self.api = Api()
         self.ctx = coordinator.IVTAnywhereIICoordinator(self.hass, self.api, "test-gateway")
@@ -132,6 +132,27 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data.electricity_kwh_last_hour, 2)
         self.assertEqual(data.electricity_kwh_month, 20)
         self.assertEqual(data.cop_month, 0.5)
+
+    async def test_today_uses_hours_even_when_daily_projection_revises(self):
+        original_bulk = self.api.bulk
+        projection = {"y": 600, "c": 480}
+
+        async def bulk(gateway, paths):
+            response = await original_bulk(gateway, paths)
+            for entry in response[0]["resourcePaths"]:
+                p = entry["gatewayResponse"]["payload"]
+                if p["sampleRate"] == "P1D":
+                    p["recording"].append(dict(projection))
+            return response
+
+        self.api.bulk = bulk
+        clock.now = lambda: datetime(2026, 2, 2, 8, tzinfo=timezone.utc)
+        data = await self.update()
+        self.assertEqual(data.compressor_kwh_month, 18)
+        projection.update(y=120, c=60)
+        self.assertEqual((await self.update()).compressor_kwh_month, 18)
+        clock.now = lambda: datetime(2026, 2, 2, 9, tzinfo=timezone.utc)
+        self.assertEqual((await self.update()).compressor_kwh_month, 19)
 
     async def test_equal_hourly_values_still_have_distinct_periods(self):
         first = await self.update()
@@ -179,13 +200,30 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_month_boundary_allows_reset(self):
         await self.update()
-        clock.now = lambda: datetime(2026, 3, 1, 12, tzinfo=timezone.utc)
+        clock.now = lambda: datetime(2026, 3, 1, 0, tzinfo=timezone.utc)
         self.api.month_value = 60
-        self.assertEqual((await self.update()).electricity_kwh_month, 2)
+        data = await self.update()
+        self.assertEqual(data.electricity_kwh_month, 0)
+        self.assertEqual(data.month_reset, datetime(2026, 3, 1, tzinfo=timezone.utc))
+        self.ctx = coordinator.IVTAnywhereIICoordinator(self.hass, self.api, "test-gateway")
+        self.assertEqual((await self.update()).month_reset, data.month_reset)
+
+    async def test_legacy_projected_peak_does_not_block_corrected_month(self):
+        self.hass.storage[self.ctx._month_store.key] = {
+            "month": "2026-02", "values": {"compressor": 1000, "eheater": 10, "output": 2000}
+        }
+        data = await self.update()
+        self.assertEqual(data.electricity_kwh_month, 20)
+        self.assertIsNone(data.month_reset)
+        saved = self.hass.storage[self.ctx._month_store.key]
+        self.assertEqual(saved["basis"], "completed_days_and_hours")
+        self.ctx = coordinator.IVTAnywhereIICoordinator(self.hass, self.api, "test-gateway")
+        self.assertIsNone((await self.update()).month_reset)
 
     async def test_invalid_saved_values_do_not_poison_counters(self):
         self.hass.storage[self.ctx._month_store.key] = {
-            "month": "2026-02", "values": {"compressor": math.nan, "eheater": True}
+            "month": "2026-02", "basis": "completed_days_and_hours",
+            "values": {"compressor": math.nan, "eheater": True}
         }
         self.assertEqual((await self.update()).electricity_kwh_month, 20)
 
@@ -246,6 +284,51 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
 
 class MonthlyTotalTests(unittest.TestCase):
+    def test_partial_day_projection_is_not_consumption(self):
+        now = datetime(2026, 2, 2, 8, tzinfo=timezone.utc)
+        monthly = payload(600, 1440, "P1D")
+        monthly["recording"].append({"y": 600, "c": 480})
+        hourly = {"interval": "2026-02-02", "sampleRate": "P1H", "recording": [
+            {"y": value * 60, "c": 60} for value in [1, 2, 1, 1, 2, 1, 1, 1]
+        ]}
+        # The daily average extrapolates today's 10 kWh to 30. Only 10 was used.
+        self.assertEqual(util.month_to_date_kwh(monthly, hourly, now), 20)
+        monthly["recording"][1] = {"y": 120, "c": 60}
+        self.assertEqual(util.month_to_date_kwh(monthly, hourly, now), 20)
+
+    def test_only_completed_hours_are_counted(self):
+        now = datetime(2026, 2, 1, 2, 30, tzinfo=timezone.utc)
+        hourly = payload(length=24)
+        hourly["recording"][2] = {"y": 999, "c": 1}
+        self.assertEqual(util.month_to_date_kwh(None, hourly, now), 2)
+
+    def test_missing_completed_hour_is_not_a_partial_total(self):
+        now = datetime(2026, 2, 1, 8, tzinfo=timezone.utc)
+        for bad in [{"y": 1, "c": 0}, {"y": None, "c": 60}]:
+            hourly = payload(length=8)
+            hourly["recording"][3] = bad
+            self.assertIsNone(util.month_to_date_kwh(None, hourly, now))
+        self.assertIsNone(util.month_to_date_kwh(None, payload(length=7), now))
+
+    def test_midnight_needs_no_today_payload(self):
+        first = datetime(2026, 2, 1, 0, 30, tzinfo=timezone.utc)
+        self.assertEqual(util.month_to_date_kwh(None, None, first), 0)
+        later = first.replace(day=2)
+        self.assertEqual(util.month_to_date_kwh(payload(600, 1440, "P1D"), None, later), 10)
+
+    def test_wrong_day_or_rate_is_unavailable(self):
+        now = datetime(2026, 2, 1, 8, tzinfo=timezone.utc)
+        hourly = payload(length=8)
+        hourly["interval"] = "2026-01-31"
+        self.assertIsNone(util.month_to_date_kwh(None, hourly, now))
+        self.assertIsNone(util.month_to_date_kwh(None, payload(rate="P1D", length=8), now))
+
+    def test_completed_day_count_excludes_today_and_future_padding(self):
+        monthly = payload(600, 1440, "P1D", length=3)
+        monthly["recording"][1] = {"y": 999, "c": 1}
+        monthly["recording"][2] = {"y": None, "c": 0}
+        self.assertEqual(util.month_total_kwh(monthly, required_days=1), 10)
+
     def test_first_sample_and_growth(self):
         self.assertEqual(util.accept_monthly_total(0, None), 0)
         self.assertEqual(util.accept_monthly_total(12.5, None), 12.5)
@@ -286,21 +369,24 @@ class SensorTests(unittest.TestCase):
     def test_monthly_energy_still_supports_energy_dashboard(self):
         for description in sensor.SENSORS:
             if description.key.endswith("month") and description.device_class == "energy":
-                self.assertEqual(description.state_class, "total_increasing")
+                self.assertEqual(description.state_class, "total")
 
     def test_existing_sensor_identities_are_unchanged(self):
         for key in ["electricity_month", "heat_output_month"]:
             self.assertEqual(self.entity(key)._attr_unique_id, f"test-gateway_{key}")
         self.assertEqual(self.entity("electricity_last_hour")._attr_unique_id, "test-gateway_electricity_last_hour")
 
-    def test_reset_marker_applies_only_to_hourly_energy(self):
+    def test_reset_markers_apply_to_energy_periods_only(self):
         from types import SimpleNamespace
         marker = datetime(2026, 2, 1, 11, tzinfo=timezone.utc)
-        self.ctx.data = SimpleNamespace(last_hour_reset=marker)
+        self.ctx.data = SimpleNamespace(last_hour_reset=marker, month_reset=None)
         for key in ["electricity_last_hour", "compressor_last_hour", "eheater_last_hour", "heat_output_last_hour"]:
             self.assertEqual(self.entity(key).last_reset, marker)
         for key in ["electricity_month", "heat_output_month", "cop_last_hour", "cop_month"]:
             self.assertIsNone(self.entity(key).last_reset)
+        self.ctx.data.month_reset = marker.replace(day=1, hour=0)
+        self.assertEqual(self.entity("electricity_month").last_reset, self.ctx.data.month_reset)
+        self.assertIsNone(self.entity("cop_month").last_reset)
 
     def test_missing_value_is_unavailable_but_measured_zero_is_available(self):
         from types import SimpleNamespace

@@ -34,15 +34,22 @@ Sensors are built from the data Bosch records and publishes afterwards. Typical 
 
 For the supported `energyMonitoring` recordings, `y` is a sampled sum and `c`
 is the sample count. They are not raw Wh values. The integration calculates
-each hourly (`P1H`) bucket as `y / c` kWh and each daily (`P1D`) bucket as
-`24 * y / c` kWh. For example, `y=60, c=60` represents 1 kWh for an hourly
+each completed hourly (`P1H`) bucket as `y / c` kWh and each completed daily
+(`P1D`) bucket as `24 * y / c` kWh. For example, `y=60, c=60` represents 1 kWh for an hourly
 bucket; `y=600, c=1440` represents 10 kWh for a daily bucket. This matches the
 [FHEM KM200 recording implementation](https://github.com/fhem/fhem-mirror/blob/master/fhem/FHEM/73_km200.pm).
 
 Zero-count buckets are padding or missing data. They are not measured zero
 consumption. Missing or invalid readings are unavailable, and electricity/COP
 require both compressor and auxiliary-heater data. Month-to-date totals also
-require data for every completed day. A genuine measured zero remains valid.
+require data for every completed day and every completed hour of today. A genuine measured zero remains valid.
+
+Month-to-date is the sum of completed daily buckets before today plus today's
+completed hourly buckets. Today's daily bucket is never included: its average
+extrapolated to 24 hours is a projection, not consumption so far. For example,
+`y=600, c=480` can project 30 kWh for the day even though the eight completed
+hourly buckets sum to only 10 kWh. Future and incomplete hourly buckets are
+excluded. Before the first hour of a new month is complete, the total is zero.
 
 Small downward revisions of a monthly total retain the last accepted value,
 so the monthly electricity total and COP stay available without making Home
@@ -57,9 +64,21 @@ with the corresponding app views.
 The per-hour energy sensors use `total` with an explicit `last_reset` for the
 recorded hour. This retains long-term statistics while treating each hour as a
 new energy cycle. Repeated polls and restarts within the same recorded hour
-keep the same reset marker. Monthly energy sensors use `total_increasing`.
+keep the same reset marker. Monthly energy sensors use `total` because recorded
+totals can be corrected, with an explicit reset at real month boundaries.
+On initial installation or migration the reset marker stays unset for the
+current month, so the transition does not count the entire month again.
 COP uses `measurement`. See Home Assistant's
 [periodic totals guidance](https://contributors.home-assistant.io/core/entities/sensor/#choosing-between-total-classes).
+
+For hourly electricity charts in the Energy dashboard, select **Electricity
+last complete hour**, rather than a delayed monthly counter. Recorded hours
+arrive after they finish and may appear in the reporting hour in Home Assistant.
+
+Upgrading from a build that included today's daily projection discards the old
+cached peak. Corrected monthly readings may be lower. Historical Home Assistant
+statistics are not rewritten by the integration; review any previously inflated
+Energy readings separately before relying on them.
 
 ---
 

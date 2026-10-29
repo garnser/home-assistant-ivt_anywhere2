@@ -68,14 +68,15 @@ SENSORS: tuple[IVTSensorDescription, ...] = (
         value_fn=lambda d: d.cop_last_hour,
     ),
     # ----------------------------
-    # Month-to-date cumulative energy -> total_increasing (Energy Dashboard compatible)
+    # Recorded monthly totals can be revised; explicit calendar resets keep
+    # corrections from being misidentified as a whole new energy cycle.
     # ----------------------------
     IVTSensorDescription(
         key="compressor_month",
         name="Compressor electricity month-to-date",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         value_fn=lambda d: d.compressor_kwh_month,
     ),
     IVTSensorDescription(
@@ -83,7 +84,7 @@ SENSORS: tuple[IVTSensorDescription, ...] = (
         name="E-heater electricity month-to-date",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         value_fn=lambda d: d.eheater_kwh_month,
     ),
     IVTSensorDescription(
@@ -91,7 +92,7 @@ SENSORS: tuple[IVTSensorDescription, ...] = (
         name="Electricity month-to-date",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         value_fn=lambda d: d.electricity_kwh_month,
     ),
     IVTSensorDescription(
@@ -99,7 +100,7 @@ SENSORS: tuple[IVTSensorDescription, ...] = (
         name="Heat output month-to-date",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         value_fn=lambda d: d.heat_output_kwh_month,
     ),
     IVTSensorDescription(
@@ -127,11 +128,15 @@ class IVTEnergySensor(CoordinatorEntity[IVTAnywhereIICoordinator], SensorEntity)
 
     @property
     def last_reset(self) -> Optional[datetime]:
-        """Reset once per recorded hour, never once per poll or restart."""
+        """Use a stable reset for each recorded hour or calendar month."""
         if self.entity_description.state_class != SensorStateClass.TOTAL:
             return None
         data = self.coordinator.data
-        return data.last_hour_reset if data is not None else None
+        if data is None:
+            return None
+        if self.entity_description.key.endswith("_month"):
+            return data.month_reset
+        return data.last_hour_reset
 
     @property
     def native_value(self) -> Optional[float]:

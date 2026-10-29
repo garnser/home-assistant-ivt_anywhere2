@@ -130,19 +130,49 @@ def kwh_at_index(payload: Optional[dict], idx: int) -> Optional[float]:
     return None if points is None else points[0]
 
 
-def month_total_kwh(payload: Optional[dict], required_days: int = 0) -> Optional[float]:
+def month_total_kwh(payload: Optional[dict], required_days: Optional[int] = None) -> Optional[float]:
+    """Sum completed days only when their count is specified.
+
+    A daily bucket for today is an average extrapolated to 24 hours, not
+    consumption so far. Never include it in a month-to-date counter.
+    """
+    if required_days == 0:
+        return 0.0
     if not isinstance(payload, dict) or payload.get("sampleRate") != "P1D":
         return None
     rec = payload.get("recording")
-    if not isinstance(rec, list) or len(rec) < required_days:
+    if not isinstance(rec, list) or (required_days is not None and (required_days < 0 or len(rec) < required_days)):
         return None
-    for point in rec[:required_days]:
+    completed = rec if required_days is None else rec[:required_days]
+    for point in completed:
         values = recording_points(
             {"sampleRate": payload.get("sampleRate"), "recording": [point]}
         )
         if values is None:
             return None
-    return sum_kwh(payload)
+    return sum_kwh({"sampleRate": "P1D", "recording": completed})
+
+
+def month_to_date_kwh(
+    monthly: Optional[dict], hourly: Optional[dict], now: datetime
+) -> Optional[float]:
+    """Completed daily totals plus today's completed hourly buckets.
+
+    At midnight today's hourly payload is not needed. During the day every
+    elapsed hour must be present: padding must not silently become zero.
+    """
+    past = month_total_kwh(monthly, required_days=now.day - 1)
+    if past is None:
+        return None
+    if now.hour == 0:
+        return past
+    if not isinstance(hourly, dict) or hourly.get("interval") not in (None, now.strftime("%Y-%m-%d")):
+        return None
+    values = [kwh_at_index(hourly, index) for index in range(now.hour)]
+    if any(value is None for value in values):
+        return None
+    total = past + sum(values)
+    return total if math.isfinite(total) else None
 
 
 def compute_cop(heat_kwh: Optional[float], elec_kwh: Optional[float]) -> Optional[float]:
