@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from homeassistant.core import HomeAssistant
@@ -21,7 +21,7 @@ from .util import (
     last_complete_hour_start,
     last_complete_hour_target,
     month_str,
-    month_total_kwh,
+    month_to_date_kwh,
 )
 
 
@@ -42,6 +42,7 @@ class EnergyData:
     heat_output_kwh_month: Optional[float]
     cop_month: Optional[float]
     last_hour_reset: Optional[datetime] = None
+    month_reset: Optional[datetime] = None
 
 
 class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
@@ -60,6 +61,7 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
         self._month_guard_loaded = False
         self._counter_month: Optional[str] = None
         self._month_high_water: dict[str, float] = {}
+        self._month_reset: Optional[datetime] = None
 
     async def _async_update_data(self) -> EnergyData:
         try:
@@ -122,10 +124,11 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
 
             cop_last = compute_cop(out_last, elec_last)
 
-            # Month-to-date totals (sum daily buckets)
-            comp_m = month_total_kwh(p_m_comp, required_days=now.day - 1)
-            eh_m = month_total_kwh(p_m_eh, required_days=now.day - 1)
-            out_m = month_total_kwh(p_m_out, required_days=now.day - 1)
+            # Today's daily bucket is a full-day projection. Use only actual
+            # completed hours for today, and daily buckets for earlier days.
+            comp_m = month_to_date_kwh(p_m_comp, p_day_comp, now)
+            eh_m = month_to_date_kwh(p_m_eh, p_day_eh, now)
+            out_m = month_to_date_kwh(p_m_out, p_day_out, now)
 
             comp_m, eh_m, out_m = await self._async_accept_monthly_totals(
                 month, comp_m, eh_m, out_m
@@ -142,6 +145,7 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
                 gateway_id=self.gateway_id,
                 last_hour_label=label,
                 last_hour_reset=last_complete_hour_start(now),
+                month_reset=self._month_reset,
                 compressor_kwh_last_hour=comp_last,
                 eheater_kwh_last_hour=eh_last,
                 electricity_kwh_last_hour=elec_last,
@@ -170,12 +174,25 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
         missing reports remain unavailable. The accepted values survive restarts
         and are reset only at a real month boundary.
         """
+        changed = False
         if not self._month_guard_loaded:
             saved = await self._month_store.async_load()
             if isinstance(saved, dict):
                 self._counter_month = saved.get("month")
                 values = saved.get("values", {})
-                if isinstance(values, dict):
+                # Old stored values may contain a projected unfinished day.
+                # Do not reject corrected readings against that inflated peak.
+                compatible = saved.get("basis") == "completed_days_and_hours"
+                changed = not compatible
+                reset = saved.get("reset")
+                if compatible and isinstance(reset, str):
+                    try:
+                        parsed = datetime.fromisoformat(reset)
+                        if parsed.tzinfo is not None:
+                            self._month_reset = parsed
+                    except ValueError:
+                        pass
+                if compatible and isinstance(values, dict):
                     self._month_high_water = {
                         key: float(value)
                         for key, value in values.items()
@@ -187,8 +204,15 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
                     }
             self._month_guard_loaded = True
 
-        changed = self._counter_month != month
-        if changed:
+        if self._counter_month != month:
+            # On initial installation/migration keep the old None reset marker
+            # so HA does not count the entire current month as a new cycle.
+            # Subsequent real month boundaries get a stable explicit reset.
+            self._month_reset = (
+                dt_util.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+                if self._counter_month is not None else None
+            )
+            changed = True
             self._counter_month = month
             self._month_high_water = {}
 
@@ -214,6 +238,8 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
             self._month_store.async_delay_save(
                 lambda: {
                     "month": self._counter_month,
+                    "basis": "completed_days_and_hours",
+                    "reset": self._month_reset.isoformat() if self._month_reset else None,
                     "values": dict(self._month_high_water),
                 },
                 5,
