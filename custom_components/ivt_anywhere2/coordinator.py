@@ -54,6 +54,7 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
             name="IVT Anywhere II Energy",
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL_SECONDS),
         )
+        self.recording_diagnostics = None
         self.api = api
         self.gateway_id = gateway_id
         self._month_store = Store(
@@ -120,6 +121,12 @@ class IVTAnywhereIICoordinator(DataUpdateCoordinator[EnergyData]):
             p_m_comp = _extract_payload_from_bulk(month_resp, "/energyMonitoring/compressor?interval=")
             p_m_eh = _extract_payload_from_bulk(month_resp, "/energyMonitoring/eheater?interval=")
             p_m_out = _extract_payload_from_bulk(month_resp, "/energyMonitoring/outputProduced?interval=")
+
+            self.recording_diagnostics = {
+                "fetched_at": now.isoformat(), "target": label,
+                "day": {"compressor": p_day_comp, "eheater": p_day_eh, "output": p_day_out},
+                "month": {"compressor": p_m_comp, "eheater": p_m_eh, "output": p_m_out},
+            }
 
             # Pick the exact bucket for the last completed hour
             comp_last = kwh_at_index(p_day_comp, hour_idx)

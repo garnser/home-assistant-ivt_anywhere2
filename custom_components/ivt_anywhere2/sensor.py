@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Optional, Any
+from typing import Any, Callable, Optional
 
 from homeassistant.components.sensor import (
+    SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
-    SensorDeviceClass,
     SensorStateClass,
 )
 from homeassistant.const import UnitOfEnergy
@@ -117,14 +117,19 @@ SENSORS: tuple[IVTSensorDescription, ...] = (
 class IVTEnergySensor(CoordinatorEntity[IVTAnywhereIICoordinator], SensorEntity):
     entity_description: IVTSensorDescription
 
-    def __init__(self, coordinator: IVTAnywhereIICoordinator, description: IVTSensorDescription) -> None:
+    def __init__(
+        self, coordinator: IVTAnywhereIICoordinator, description: IVTSensorDescription
+    ) -> None:
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{coordinator.gateway_id}_{description.key}"
 
     @property
     def available(self) -> bool:
-        return super().available and self.entity_description.value_fn(self.coordinator.data) is not None
+        return (
+            super().available
+            and self.entity_description.value_fn(self.coordinator.data) is not None
+        )
 
     @property
     def last_reset(self) -> Optional[datetime]:
@@ -141,11 +146,13 @@ class IVTEnergySensor(CoordinatorEntity[IVTAnywhereIICoordinator], SensorEntity)
     @property
     def native_value(self) -> Optional[float]:
         data: EnergyData = self.coordinator.data
-        return self.entity_description.value_fn(data)
+        return self.entity_description.value_fn(data) if data is not None else None
 
     @property
     def extra_state_attributes(self) -> Optional[dict[str, Any]]:
         d = self.coordinator.data
+        if d is None:
+            return None
         if "last_hour" in self.entity_description.key:
             return {"bucket": d.last_hour_label}
         return None
@@ -162,5 +169,36 @@ class IVTEnergySensor(CoordinatorEntity[IVTAnywhereIICoordinator], SensorEntity)
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    coordinator: IVTAnywhereIICoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    coordinator: IVTAnywhereIICoordinator = hass.data[DOMAIN][entry.entry_id][
+        "coordinator"
+    ]
     async_add_entities([IVTEnergySensor(coordinator, d) for d in SENSORS])
+    runtime = hass.data[DOMAIN][entry.entry_id]
+    if local := runtime.get("local_coordinator"):
+        from .model_sensor import IVTLocalSensor
+
+        entities = [IVTLocalSensor(local, "comparison", "IVT local cloud comparison")]
+        for kind, label in (
+            ("compressor", "compressor electricity"),
+            ("eheater", "auxiliary electricity"),
+            ("output", "heat output"),
+        ):
+            for period, suffix in (
+                ("hour", "last complete hour"),
+                ("month", "month to date"),
+            ):
+                entities.append(
+                    IVTLocalSensor(
+                        local, f"{kind}_{period}", f"IVT local {label} {suffix}"
+                    )
+                )
+        async_add_entities(entities)
+    if estimate := runtime.get("estimate_coordinator"):
+        from .model_sensor import MODEL_SENSORS, IVTHeatEstimateSensor
+
+        async_add_entities(
+            [
+                IVTHeatEstimateSensor(estimate, *description)
+                for description in MODEL_SENSORS
+            ]
+        )

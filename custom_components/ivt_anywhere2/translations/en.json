@@ -4,5 +4,51 @@
       "auth_failed": "Authentication failed. Check your refresh token.",
       "no_gateways": "No gateways found for this account."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Local readings and heat estimation",
+        "description": "Both features are optional and disabled by default. Local reads require an existing Bosch integration entry for the same gateway. Model values are estimates, separate from reported energy.",
+        "data": {
+          "local_enabled": "Enable independent local readings",
+          "model_enabled": "Enable heat and COP model"
+        }
+      },
+      "local": {
+        "title": "Local iCom gateway",
+        "description": "Enter the LAN address or hostname only. Credentials are read from your matching Bosch integration entry, not copied into IVT options. Reads occur even if the cloud fails.",
+        "data": {
+          "host": "Gateway address",
+          "poll_seconds": "Local polling interval (seconds; minimum 300)"
+        }
+      },
+      "model": {
+        "title": "Heat-model inputs and assumptions",
+        "description": "Select supply/return temperatures (°C or °F) and compressor modulation (%). Tank temperature is optional. Default rating COP 4.8 at B0/W35 and tank 180 L describe GEO 512C; check your appliance specification. Calibration is optional, uses vetted whole days, and is not an independent heat meter.",
+        "data": {
+          "supply_entity": "Supply temperature sensor",
+          "return_entity": "Return temperature sensor",
+          "modulation_entity": "Compressor modulation sensor",
+          "tank_entity": "Tank temperature sensor (optional)",
+          "reference_cop": "Manufacturer reference COP",
+          "reference_source_c": "Reference source/brine temperature (°C)",
+          "reference_flow_c": "Reference supply temperature (°C)",
+          "assumed_source_c": "Assumed source/brine temperature (°C)",
+          "tank_volume_litres": "Tank volume (litres)",
+          "performance_factor": "Manual compressor-performance multiplier",
+          "condensing_offset_k": "Assumed condenser offset above supply (K)",
+          "evaporating_offset_k": "Assumed evaporator offset below source (K)",
+          "calibration_enabled": "Enable guarded calibration against gateway heat recordings",
+          "reported_heat_includes_auxiliary": "Gateway heat output includes auxiliary heat (calibration only)"
+        }
+      }
+    },
+    "error": {
+      "model_requires_local": "The heat model requires local readings to be enabled.",
+      "bosch_credentials_required": "Configure the Bosch integration for the same gateway ID first. Its entry must contain local credentials.",
+      "invalid_host": "Enter only a gateway IP address or hostname, without a URL path.",
+      "invalid_model_settings": "Check the model limits and select distinct supply, return and modulation sensors with supported units. Temperature sensors need °C/°F and modulation needs %."
+    }
   }
 }
