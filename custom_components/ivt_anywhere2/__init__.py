@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
@@ -62,6 +63,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = {
         "api": api,
         "coordinator": coordinator,
+        "options_snapshot": deepcopy(dict(entry.options)),
     }
 
     try:
@@ -123,6 +125,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_options_updated(hass, entry):
+    # Config-entry listeners also receive refresh-token/data changes. Reloading
+    # those would interrupt local polling every time cloud credentials rotate.
+    runtime = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if runtime is None or dict(entry.options) == runtime.get("options_snapshot"):
+        return
     await hass.config_entries.async_reload(entry.entry_id)
 
 

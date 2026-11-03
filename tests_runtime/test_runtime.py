@@ -3,6 +3,7 @@
 import sys
 import tempfile
 import unittest
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import timedelta
 from pathlib import Path
@@ -25,6 +26,7 @@ from custom_components.ivt_anywhere2 import (
     local,
     model_sensor,
 )
+from custom_components.ivt_anywhere2.const import DOMAIN
 from custom_components.ivt_anywhere2.model_config import ModelSettings
 
 
@@ -379,8 +381,21 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_options_update_reloads_only_this_entry(self):
         from custom_components.ivt_anywhere2 import _async_options_updated
 
+        self.hass.data[DOMAIN][self.entry.entry_id] = {"options_snapshot": {}}
+        self.entry.options = {"local": {"enabled": True}}
         await _async_options_updated(self.hass, self.entry)
         self.hass.config_entries.async_reload.assert_awaited_once_with("test-entry")
+
+    async def test_refresh_token_update_does_not_reload_the_entry(self):
+        from custom_components.ivt_anywhere2 import _async_options_updated
+
+        self.entry.options = {"local": {"enabled": True}}
+        self.hass.data[DOMAIN][self.entry.entry_id] = {
+            "options_snapshot": deepcopy(self.entry.options)
+        }
+        self.entry.data["refresh_token"] = "rotated-test-token"
+        await _async_options_updated(self.hass, self.entry)
+        self.hass.config_entries.async_reload.assert_not_awaited()
 
     async def test_diagnostics_redact_credentials_and_sensor_mappings(self):
         self.entry.data.update(access_key="secret-key", password="secret-password")
