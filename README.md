@@ -129,6 +129,24 @@ Energy readings separately before relying on them.
 
 ---
 
+## Optional local readings and heat/COP estimation
+
+**Configure** the IVT integration to enable read-only local gateway polling and
+an optional background heat model. Select your temperature/modulation sensors,
+gateway address and manufacturer reference rating; no personal sensor IDs or
+LAN addresses are built into the feature. A matching Bosch integration entry
+supplies local credentials. Cloud-only installations keep their existing setup.
+
+Model outputs include rolling 24-hour estimates, covered-month subtotals and
+explicitly labelled month projections. Valid zero energy readings are preserved;
+possible whole-kWh reporting is flagged rather than replaced with guessed usage.
+Calibration is disabled by default and can be enabled with strict whole-day and
+chronological validation gates. These are estimates, not heat-meter readings.
+
+See [setup, assumptions, data-quality rules and sensors](docs/heat-model.md).
+
+---
+
 ## Installation
 
 ### Option A — HACS (recommended)

@@ -1,14 +1,23 @@
 {
   "domain": "ivt_anywhere2",
   "name": "IVT Anywhere II (Bosch Pointt)",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "documentation": "https://github.com/garnser/home-assistant-ivt_anywhere2",
-  "requirements": [],
-  "dependencies": ["recorder"],
+  "requirements": [
+    "bosch-thermostat-client==0.28.2"
+  ],
+  "dependencies": [
+    "recorder"
+  ],
   "config_flow": true,
   "iot_class": "cloud_polling",
   "render_readme": true,
   "issue_tracker": "https://github.com/garnser/home-assistant-ivt_anywhere2/issues",
   "integration_type": "device",
-  "codeowners": ["@garnser"]
+  "codeowners": [
+    "@garnser"
+  ],
+  "after_dependencies": [
+    "bosch"
+  ]
 }
