@@ -1,0 +1,256 @@
+--- a/custom_components/bosch/__init__.py
++++ b/custom_components/bosch/__init__.py
+@@ -4,7 +4,6 @@
+ import asyncio
+ import logging
+ import random
+-from collections.abc import Awaitable
+ from datetime import timedelta
+ from typing import Any
+ 
+@@ -93,6 +92,7 @@
+     async_register_services,
+     async_remove_services,
+ )
++from .xmpp_recovery import async_close_gateway, configure_xmpp_recovery
+ 
+ SIGNALS = {
+     CLIMATE: SIGNAL_CLIMATE_UPDATE_BOSCH,
+@@ -134,6 +134,10 @@
+ async def async_setup(hass: HomeAssistant, config: ConfigType):
+     """Initialize the Bosch platform."""
+     hass.data[DOMAIN] = {}
++    # Actions must exist even when a gateway is offline during entry setup.
++    async_register_services(hass, None)
++    async_register_debug_service(hass, None)
++    _LOGGER.info("Bosch connection recovery patch 2026.11.05.1 active")
+     return True
+ 
+ 
+@@ -153,11 +157,19 @@
+         entry=entry,
+     )
+     hass.data[DOMAIN][uuid] = {BOSCH_GATEWAY_ENTRY: gateway_entry}
+-    _init_status: bool = await gateway_entry.async_init()
+-    if not _init_status:
+-        return _init_status
+-    async_register_services(hass, entry)
+-    return True
++    initialized = False
++    try:
++        initialized = await gateway_entry.async_init()
++        return initialized
++    finally:
++        if not initialized:
++            # A retry must not leave an old XMPP client reconnecting in parallel.
++            hass.data[DOMAIN].pop(uuid, None)
++            if gateway_entry.gateway is not None:
++                try:
++                    await async_close_gateway(gateway_entry.gateway, force=True)
++                except Exception:
++                    _LOGGER.debug("Closing failed Bosch setup", exc_info=True)
+ 
+ 
+ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
+@@ -165,6 +177,8 @@
+     _LOGGER.debug("Removing entry.")
+     uuid = entry.data[UUID]
+     data = hass.data[DOMAIN][uuid]
++    if not await data[BOSCH_GATEWAY_ENTRY].async_reset():
++        return False
+ 
+     def remove_entry(key):
+         value = data.pop(key, None)
+@@ -174,10 +188,9 @@
+     remove_entry(INTERVAL)
+     remove_entry(FW_INTERVAL)
+     remove_entry(RECORDING_INTERVAL)
+-    bosch = hass.data[DOMAIN].pop(uuid)
+-    unload_ok = await bosch[BOSCH_GATEWAY_ENTRY].async_reset()
++    hass.data[DOMAIN].pop(uuid)
+     async_remove_services(hass, entry)
+-    return unload_ok
++    return True
+ 
+ 
+ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
+@@ -245,16 +258,19 @@
+             access_key=self._access_key,
+             access_token=self._access_token,
+         )
++        configure_xmpp_recovery(self.gateway)
+ 
+         async def close_connection(event) -> None:
+             """Close connection with server."""
+             _LOGGER.debug("Closing connection to Bosch")
+-            await self.gateway.close()
++            await async_close_gateway(self.gateway)
+ 
+         if await self.async_init_bosch():
+-            self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, close_connection)
+-            async_dispatcher_connect(
+-                self.hass, SIGNAL_BOSCH, self.async_get_signals
++            self.config_entry.async_on_unload(
++                self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, close_connection)
++            )
++            self.config_entry.async_on_unload(
++                async_dispatcher_connect(self.hass, SIGNAL_BOSCH, self.async_get_signals)
+             )
+             await self.hass.config_entries.async_forward_entry_setups(
+                 self.config_entry,
+@@ -495,12 +511,10 @@
+         """Reset this device to default state."""
+         _LOGGER.warning("Unloading Bosch module.")
+         _LOGGER.debug("Closing connection to gateway.")
+-        tasks: list[Awaitable] = [
+-            self.hass.config_entries.async_forward_entry_unload(
+-                self.config_entry, platform
+-            )
+-            for platform in self.supported_platforms
+-        ]
+-        unload_ok = await asyncio.gather(*tasks)
+-        await self.gateway.close(force=False)
+-        return all(unload_ok)
++        unload_ok = await self.hass.config_entries.async_unload_platforms(
++            self.config_entry,
++            [platform for platform in self.supported_platforms if platform != SOLAR],
++        )
++        if unload_ok:
++            await async_close_gateway(self.gateway)
++        return unload_ok
+--- a/custom_components/bosch/services.py
++++ b/custom_components/bosch/services.py
+@@ -5,7 +5,8 @@
+ from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+ from homeassistant.const import ATTR_DEVICE_ID
+ from homeassistant.util import dt as dt_util
+-from homeassistant.config_entries import ConfigEntry
++from homeassistant.config_entries import ConfigEntry, ConfigEntryState
++from homeassistant.exceptions import HomeAssistantError
+ import homeassistant.helpers.device_registry as dr
+ import homeassistant.helpers.config_validation as cv
+ from bosch_thermostat_client.const import RECORDING
+@@ -43,27 +44,29 @@
+     for target in devices_id:
+         device = registry.async_get(target)
+         if device:
+-            device_entries = list[ConfigEntry]()
+             for entry_id in device.config_entries:
+                 entry = hass.config_entries.async_get_entry(entry_id)
+-                if entry and entry.domain == DOMAIN and entry not in config_entries:
+-                    device_entries.append(entry)
+-                if not device_entries:
+-                    continue
+-                config_entries.extend(device_entries)
++                if (
++                    entry and entry.domain == DOMAIN
++                    and entry.state is ConfigEntryState.LOADED
++                    and entry not in config_entries
++                ):
++                    config_entries.append(entry)
+         else:
+             _LOGGER.warn(
+                 f"Device '{target}' not found in device registry"
+             )
+     bosch_gateway_entries = []
+-    for entry in hass.data[DOMAIN].values():
++    for entry in hass.data.get(DOMAIN, {}).values():
+         for config_entry in config_entries:
+             if entry[BOSCH_GATEWAY_ENTRY].device_id == config_entry.entry_id:
+                 bosch_gateway_entries.append(entry[BOSCH_GATEWAY_ENTRY])
++    if not bosch_gateway_entries:
++        raise HomeAssistantError("The selected Bosch gateway is not loaded; Home Assistant will retry its connection.")
+     return bosch_gateway_entries
+ 
+ 
+-def async_register_debug_service(hass: HomeAssistant, entry: ConfigEntry) -> None:
++def async_register_debug_service(hass: HomeAssistant, entry: ConfigEntry | None) -> None:
+     """Register services."""
+ 
+     async def async_handle_debug_service(service_call: ServiceCall) -> ServiceResponse:
+@@ -88,7 +91,7 @@
+     )
+ 
+ 
+-def async_register_services(hass: HomeAssistant, entry: ConfigEntry) -> None:
++def async_register_services(hass: HomeAssistant, entry: ConfigEntry | None) -> None:
+     """Register services."""
+ 
+     async def async_handle_thermostat_refresh(service_call: ServiceCall):
+@@ -199,6 +202,4 @@
+ 
+ 
+ def async_remove_services(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+-    """Remove services."""
+-    hass.services.async_remove(DOMAIN, SERVICE_DEBUG)
+-    hass.services.async_remove(DOMAIN, SERVICE_UPDATE)
++    """Keep domain actions available during unload, reconnect and setup retries."""
+--- a/custom_components/bosch/sensor/base.py
++++ b/custom_components/bosch/sensor/base.py
+@@ -48,10 +48,8 @@
+         else:
+             self._name = f"{self._bosch_object.parent_id} {name}"
+         self._attr_uri = attr_uri
+-        if self._bosch_object.device_class:
+-            self._attr_device_class = self._bosch_object.device_class
+-        if self._bosch_object.state_class:
+-            self._attr_state_class = self._bosch_object.state_class
++        self._attr_device_class = self._bosch_object.device_class
++        self._attr_state_class = self._bosch_object.state_class
+         self._attr_entity_category = entity_categories.get(
+             self._bosch_object.entity_category, None
+         )
+@@ -113,12 +111,9 @@
+         self._attrs = {}
+         if not data:
+             if not self._bosch_object.update_initialized:
+-                self._state = (
+-                    None
+-                    if self._attr_state_class
+-                    and self._attr_state_class == "measurement"
+-                    else self._bosch_object.state
+-                )
++                # Missing endpoint data is not a usable reading, even if the
++                # client represents it with the literal string "unavailable".
++                self._state = None
+                 self._attrs["stateExtra"] = self._bosch_object.state_message
+             return
+         self.attrs_write(
+--- /dev/null
++++ b/custom_components/bosch/xmpp_recovery.py
+@@ -0,0 +1,35 @@
++"""Reconnect compatibility for bosch-thermostat-client 0.28.2."""
++
++from bosch_thermostat_client.connectors.xmpp import XMPPBaseConnector
++
++
++def configure_xmpp_recovery(gateway) -> None:
++    """Clear stale authentication flags so the next request reconnects.
++
++    The client library sets _auth_success on login, but does not reset it when
++    the TCP session ends. Its request path then sends into a closed session
++    indefinitely. Keep this workaround in /config, not ephemeral site-packages.
++    """
++    connector = getattr(gateway, "_connector", None)
++    if not isinstance(connector, XMPPBaseConnector):
++        return
++
++    def disconnected(_event):
++        connector._auth_success = False
++        connector.connected_event.clear()
++        connector.disconnect_event.set()
++
++    def session_started(_event):
++        connector.disconnect_event.clear()
++
++    connector.client.add_event_handler("session_end", disconnected)
++    connector.client.add_event_handler("disconnected", disconnected)
++    connector.client.add_event_handler("session_start", session_started)
++
++
++async def async_close_gateway(gateway, *, force=False) -> None:
++    """Cancel pending connection attempts even if login never completed."""
++    connector = getattr(gateway, "_connector", None)
++    if isinstance(connector, XMPPBaseConnector):
++        connector.client.cancel_connection_attempt()
++    await gateway.close(force=force)

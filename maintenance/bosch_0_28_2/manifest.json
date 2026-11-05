@@ -1,0 +1,22 @@
+{
+  "bosch_version": "0.28.2",
+  "client_version": "0.28.2",
+  "files": {
+    "__init__.py": {
+      "original_sha256": "56a3efd38b6865f8a791ca6b849a4aaa574d94e209487bd8a8b023ba5a1e745b",
+      "patched_sha256": "a9fa48352d899d1f88f21a0f6f59ba0e7c128f6df4533855a9d81b382377c01f"
+    },
+    "services.py": {
+      "original_sha256": "f9bc7e9b2f7fe0f2987a60c30592b32df6ea26b1e3d18137e49c4bd54ead5b0b",
+      "patched_sha256": "6230a42c5a93be522eddb5a4f4fa0e09007845631e979ea620e7791a803c5422"
+    },
+    "sensor/base.py": {
+      "original_sha256": "ae5bb605e36976ca9c8ab37a9e702efa9efe2b7aa7540a2ea282424a68a87d0a",
+      "patched_sha256": "a21eeb30b8b75c701c1f2ab37bf1a53e30acdf7358a2b0a85b31319f92fc591f"
+    },
+    "xmpp_recovery.py": {
+      "original_sha256": null,
+      "patched_sha256": "d05056d6f2fcac8a7bc545e341648438d25ff24c68ce46cf442fef7bb017072a"
+    }
+  }
+}

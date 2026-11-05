@@ -15,6 +15,15 @@ This integration focuses on **recorded energy & utilization data** (hourly/daily
 * Handles **OAuth token refresh** during runtime
 * Polls every **30 minutes**, with **one-minute retries** for incomplete or failed reports
 
+### Repairing the separate Bosch thermostat integration
+
+If a Bosch 0.28.2 startup failure leaves `bosch.send_custom_get` unavailable,
+or Bosch sensors repeatedly raise a state-class `AttributeError`, this repo
+includes a tested [Bosch recovery repair](maintenance/bosch_0_28_2/README.md).
+It provides persistent source changes, a version-checked installer, backups
+and rollback. This is a separate maintenance tool: installing IVT Anywhere II
+through HACS does not automatically modify another integration's files.
+
 ---
 
 ## What you’ll get in Home Assistant
