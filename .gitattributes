@@ -1,0 +1,4 @@
+# Preserve checksummed upstream bytes and unified-diff context in this bundle.
+maintenance/bosch_0_28_2/files/** -whitespace
+maintenance/bosch_0_28_2/recovery.patch -whitespace
+tests/fixtures/bosch_0_28_2/** -whitespace
